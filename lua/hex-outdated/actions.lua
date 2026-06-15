@@ -1,4 +1,5 @@
 local config = require("hex-outdated.config")
+local lock = require("hex-outdated.lock")
 local version = require("hex-outdated.version")
 
 local M = {}
@@ -12,6 +13,43 @@ local function dep_op(dep)
 	end
 	local req = dep.requirement and version.parse_requirement(dep.requirement)
 	return req and req.op
+end
+
+-- Note describing where the requirement sits relative to the latest release.
+local function requirement_note(status)
+	if status == "up_to_date" then
+		return "allows latest"
+	elseif status == "upgradable" or status == "outdated" then
+		return "below latest"
+	elseif status == "invalid" then
+		return "no published match"
+	end
+	return "checking…"
+end
+
+--- Build the detail-float rows for a dep (pure; no Neovim APIs).
+function M._info_lines(dep)
+	local lines = { dep.name or "?" }
+	local req_note = requirement_note(dep.status)
+	lines[#lines + 1] = string.format("requirement  %s   %s", dep.requirement or "?", req_note)
+	if dep.locked then
+		local note
+		if dep.requirement and lock.out_of_range(dep.requirement, dep.locked) then
+			note = "not satisfied by requirement"
+		elseif dep.latest and lock.behind(dep.locked, dep.latest) then
+			note = "behind latest"
+		elseif dep.latest then
+			note = "up to date"
+		else
+			note = ""
+		end
+		lines[#lines + 1] = string.format("locked       %s   %s", dep.locked, note)
+	else
+		lines[#lines + 1] = "locked       (not in mix.lock)"
+	end
+	local latest_str = dep.latest or (dep.status == "invalid" and "—" or "loading")
+	lines[#lines + 1] = string.format("latest       %s", latest_str)
+	return lines
 end
 
 --- Return the dep whose row matches the cursor, or nil.
