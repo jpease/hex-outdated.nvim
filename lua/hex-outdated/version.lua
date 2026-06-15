@@ -13,7 +13,7 @@ function M.parse(str)
 		s = main
 		pre = prerelease
 	end
-	if not s:match("^%d+[%d%.]*$") then
+	if not s:match("^%d+(%.%d+)*$") then -- reject trailing/empty dot groups like "1.." or "1.2."
 		return nil
 	end
 	local parts = {}
