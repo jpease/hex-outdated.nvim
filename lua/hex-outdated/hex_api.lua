@@ -13,7 +13,8 @@ end
 
 --- Fetch package release info from hex.pm.
 --- opts: { base_url, timeout_ms, ttl_seconds, force }
---- callback receives { versions = {strings}, latest = string } or { error = msg, not_found? }.
+--- callback receives { versions = {strings}, latest = string, time = epoch }
+--- or { error = msg, not_found? }.
 function M.get_package(name, opts, callback)
 	opts = opts or {}
 	local ttl = opts.ttl_seconds or 3600
@@ -41,7 +42,9 @@ function M.get_package(name, opts, callback)
 		else
 			local body, status = (obj.stdout or ""):match("^(.*)\n(%d+)%s*$")
 			status = tonumber(status)
-			if status == 404 then
+			if not status then
+				result = { error = "malformed response (no http_code trailer)" }
+			elseif status == 404 then
 				result = { error = "package not found", not_found = true }
 			elseif status ~= 200 then
 				result = { error = "http " .. tostring(status) }
