@@ -51,9 +51,12 @@ function M.versions()
 	end)
 end
 
-function M.info()
-	local _, deps = current_deps()
-	actions.info(actions.dep_at_cursor(deps), function(name, cb)
+function M.info(dep)
+	if not dep then
+		local _, deps = current_deps()
+		dep = actions.dep_at_cursor(deps)
+	end
+	actions.info(dep, function(name, cb)
 		hex_api.get_package(name, core.api_opts(), cb)
 	end)
 end
@@ -124,7 +127,7 @@ local function attach(bufnr)
 			local st = core.state[b]
 			local dep = actions.dep_at_cursor(st and st.deps or {})
 			if dep then
-				M.info()
+				M.info(dep)
 			elseif #vim.lsp.get_clients({ bufnr = b }) > 0 then
 				vim.lsp.buf.hover()
 			else
