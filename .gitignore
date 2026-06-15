@@ -7,4 +7,8 @@ nvim.log
 .claude/
 .codex/
 .raven/
+.remember/
 docs/superpowers/
+AGENTS.md
+CLAUDE.md
+.mcp.json
