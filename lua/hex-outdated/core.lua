@@ -30,7 +30,9 @@ function M.refresh_render(bufnr)
 	end
 	local items = {}
 	for _, dep in ipairs(st.deps or {}) do
-		if dep.kind == "hex" then
+		-- "unknown" = a requirement we can't analyze (e.g. combined `and`/`or`
+		-- clauses); render nothing for it rather than a misleading indicator.
+		if dep.kind == "hex" and dep.status ~= "unknown" then
 			items[#items + 1] = {
 				row = dep.row,
 				col_start = dep.col_start,
@@ -48,6 +50,8 @@ end
 --- Parse the buffer, render loading state, then fetch + classify each hex dep.
 function M.analyze(bufnr, opts)
 	opts = opts or {}
+	-- Per-buffer `enabled` persists across calls; it is seeded from the global
+	-- config on first analyze and thereafter owned by the buffer (see toggle).
 	local st = M.state[bufnr] or { enabled = config.options.enabled }
 	M.state[bufnr] = st
 	st.deps = parser.parse_buffer(bufnr)
@@ -71,10 +75,9 @@ function M.analyze(bufnr, opts)
 				end
 				if res.error then
 					dep.status = res.not_found and "invalid" or "error"
-					dep.latest = res.latest
 				else
 					local c = version.classify(dep.requirement, res.versions or {})
-					dep.status = c.status == "unknown" and "loading" or c.status
+					dep.status = c.status -- terminal, incl. "unknown" (rendered as nothing)
 					dep.latest = c.latest
 					dep.suggested = c.suggested
 					dep.op = c.op
