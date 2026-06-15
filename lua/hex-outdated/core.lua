@@ -3,6 +3,7 @@ local hex_api = require("hex-outdated.hex_api")
 local version = require("hex-outdated.version")
 local render = require("hex-outdated.render")
 local config = require("hex-outdated.config")
+local lock = require("hex-outdated.lock")
 
 local M = {}
 
@@ -35,9 +36,14 @@ local function render_items_for_deps(deps)
 				col_start = dep.col_start,
 				col_end = dep.col_end,
 				name = dep.name,
+				requirement = dep.requirement,
 				status = dep.status or "loading",
 				latest = dep.latest,
 				suggested = dep.suggested,
+				locked = dep.locked,
+				lock_behind = (dep.locked and dep.latest and lock.behind(dep.locked, dep.latest))
+					or false,
+				lock_out_of_range = dep.lock_out_of_range or false,
 			}
 		end
 	end
