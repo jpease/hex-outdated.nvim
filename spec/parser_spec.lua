@@ -24,10 +24,12 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal("~> 1.6", line:sub(deps[1].col_start + 1, deps[1].col_end))
 	end)
 
-	it("keeps deps that have version + options", function()
+	it("keeps deps that have version + options, with correct ranges", function()
 		local deps = parser.parse_lines(lines)
 		assert.are.equal("jason", deps[2].name)
 		assert.are.equal("~> 1.4", deps[2].requirement)
+		local line = lines[deps[2].row + 1]
+		assert.are.equal("~> 1.4", line:sub(deps[2].col_start + 1, deps[2].col_end))
 	end)
 
 	it("skips scm deps with no positional version string", function()
@@ -35,5 +37,14 @@ describe("parser.parse_lines (fallback)", function()
 		for _, d in ipairs(deps) do
 			assert.are_not.equal("my_dep", d.name)
 		end
+	end)
+
+	it("reads the tuple's quote even if an earlier quote precedes it", function()
+		local deps = parser.parse_lines({ '  # "note" {:phoenix, "~> 1.6"},' })
+		assert.are.equal(1, #deps)
+		assert.are.equal("phoenix", deps[1].name)
+		assert.are.equal("~> 1.6", deps[1].requirement)
+		local line = '  # "note" {:phoenix, "~> 1.6"},'
+		assert.are.equal("~> 1.6", line:sub(deps[1].col_start + 1, deps[1].col_end))
 	end)
 end)

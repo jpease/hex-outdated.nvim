@@ -11,12 +11,13 @@ local DEP_PATTERN = '{%s*:([%w_]+)%s*,%s*"'
 function M.parse_lines(lines)
 	local deps = {}
 	for i, line in ipairs(lines) do
-		local name = line:match(DEP_PATTERN)
+		-- `quote_pos` is the 1-indexed position of the opening quote that DEP_PATTERN
+		-- ends on, so we read the requirement from exactly that tuple (not the first
+		-- quote on the line, which could belong to a comment or earlier text).
+		local _, quote_pos, name = line:find(DEP_PATTERN)
 		if name then
-			-- The first double-quote on the line opens the requirement string.
-			local quote_pos = line:find('"', 1, true)
-			local content = line:match('"([^"]*)"')
-			if quote_pos and content then
+			local content = line:match('([^"]*)"', quote_pos + 1)
+			if content then
 				deps[#deps + 1] = {
 					name = name,
 					requirement = content,
