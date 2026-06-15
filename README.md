@@ -96,12 +96,15 @@ Open a `mix.exs` — status appears automatically and updates as you type.
 | `upgrade`  | Rewrite the requirement under the cursor to the latest published version. |
 | `versions` | Floating window of published versions; `<CR>` inserts the selected one, `q`/`<Esc>` closes. |
 | `open`     | Open the package's page on hex.pm in a browser. |
+| `info`     | Floating detail view (requirement / locked / latest) for the dependency under the cursor. |
+| `lock`     | Toggle the per-buffer lock lens — a `locked X · latest Y` line under each dependency. |
 
 The same actions are exposed as functions so you can bind your own keys:
 
 ```lua
 local hex = require("hex-outdated")
 -- hex.refresh() / hex.toggle() / hex.upgrade() / hex.versions() / hex.open()
+-- hex.info()    / hex.lock()
 ```
 
 ## Status meanings
@@ -115,6 +118,25 @@ local hex = require("hex-outdated")
 
 Git/path deps and requirements the plugin can't analyze (combined `and`/`or`
 clauses) are left unannotated.
+
+## Lock context (optional)
+
+By default hex-outdated reads only `mix.exs`. When a `mix.lock` is present it can
+also surface what's actually locked — kept secondary so the inline requirement
+status stays primary:
+
+- **Detail float** — `:HexOutdated info` (or press `K` on a dependency line)
+  shows requirement / locked / latest for the dependency under the cursor.
+- **Lens** — `:HexOutdated lock` toggles a `locked X · latest Y` line under each
+  dependency (off by default).
+- **Stale-lock diagnostic** — a warning when `mix.lock` holds a version that no
+  longer satisfies your requirement (e.g. after you tighten it), prompting a
+  `mix deps.get`.
+
+All of this no-ops when there is no `mix.lock`. Disable it entirely with
+`lock = { enabled = false }`. The `K` binding only acts on dependency lines and
+otherwise falls through to LSP hover / `keywordprg`; set `popup.hover_key = false`
+to leave `K` alone.
 
 ## Configuration
 
@@ -134,6 +156,11 @@ require("hex-outdated").setup({
     ttl_seconds = 3600,
     error_ttl_seconds = 60,    -- how long a failed fetch is cached before retry
   },
+  lock = {
+    enabled = true,            -- read mix.lock when present
+    lens = false,              -- show the locked-version lens by default
+    stale_diagnostic = true,   -- warn when the lock no longer satisfies the requirement
+  },
   text = {                   -- %s is the latest version
     up_to_date = "✓ %s",
     upgradable = "↑ %s",
@@ -141,6 +168,8 @@ require("hex-outdated").setup({
     invalid = "✗ no such version",
     loading = "…",
     error = "fetch error",
+    lock_behind = "locked %s · latest %s", -- lens line when the lock is behind
+    lock_current = "locked %s · up to date",
   },
   highlight = {              -- highlight group per status
     up_to_date = "HexOutdatedUpToDate",
@@ -149,8 +178,10 @@ require("hex-outdated").setup({
     invalid = "HexOutdatedInvalid",
     loading = "HexOutdatedLoading",
     error = "HexOutdatedError",
+    lock = "HexOutdatedLock",
+    lock_behind = "HexOutdatedLockBehind",
   },
-  popup = { border = "rounded", max_height = 20 },
+  popup = { border = "rounded", max_height = 20, hover_key = "K" }, -- hover_key=false disables auto-K
   -- opt-in buffer-local keymaps (unset by default):
   keymaps = {}, -- e.g. { upgrade = "<leader>cu", versions = "<leader>cv", open = "<leader>co" }
 })
@@ -159,15 +190,16 @@ require("hex-outdated").setup({
 Highlight groups link to `Diagnostic*` by default and respect your colorscheme
 if you define them first: `HexOutdatedUpToDate`, `HexOutdatedUpgradable`,
 `HexOutdatedOutdated`, `HexOutdatedInvalid`, `HexOutdatedLoading`,
-`HexOutdatedError`.
+`HexOutdatedError`, `HexOutdatedLock`, `HexOutdatedLockBehind`.
 
 ## How it works
 
 `mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find top-level
 dependency tuples and their requirement strings. For each Hex dependency the
 plugin asynchronously queries `https://hex.pm/api/packages/:name` (cached), then
-compares your requirement against the published versions to classify it. Current
-state is read from `mix.exs` itself — no `mix.lock` and no shelling out to `mix`.
+compares your requirement against the published versions to classify it. The
+requirement status comes from `mix.exs` alone; `mix.lock` is read locally only
+for the optional lock context above. There is no shelling out to `mix`.
 
 ## Development
 

@@ -9,10 +9,11 @@ CONTENTS                                                  *hex-outdated-contents
   4. Usage ................................ |hex-outdated-usage|
   5. Commands ............................. |hex-outdated-commands|
   6. Status meanings ...................... |hex-outdated-status|
-  7. Configuration ........................ |hex-outdated-configuration|
-  8. Highlight groups ..................... |hex-outdated-highlights|
-  9. Health ............................... |hex-outdated-health|
-  10. How it works ........................ |hex-outdated-how-it-works|
+  7. Lock context ......................... |hex-outdated-lock|
+  8. Configuration ........................ |hex-outdated-configuration|
+  9. Highlight groups ..................... |hex-outdated-highlights|
+  10. Health .............................. |hex-outdated-health|
+  11. How it works ........................ |hex-outdated-how-it-works|
 
 ==============================================================================
 1. INTRODUCTION                                       *hex-outdated-introduction*
@@ -80,6 +81,7 @@ Open a `mix.exs` — status appears automatically and updates as you type.
 The actions are exposed as Lua functions so you can bind your own keys: >lua
     local hex = require("hex-outdated")
     -- hex.refresh() / hex.toggle() / hex.upgrade() / hex.versions() / hex.open()
+    -- hex.info()    / hex.lock()
 <
 ==============================================================================
 5. COMMANDS                                               *hex-outdated-commands*
@@ -95,6 +97,10 @@ The actions are exposed as Lua functions so you can bind your own keys: >lua
     versions  Floating window of published versions; <CR> inserts the selected
               one, q / <Esc> closes.
     open      Open the package's page on hex.pm in a browser.
+    info      Floating detail view (requirement / locked / latest) for the
+              dependency under the cursor.
+    lock      Toggle the per-buffer lock lens (a `locked X / latest Y` line
+              under each dependency).
 
 ==============================================================================
 6. STATUS MEANINGS                                          *hex-outdated-status*
@@ -108,7 +114,27 @@ Git/path deps and requirements the plugin can't analyze (combined `and`/`or`
 clauses) are left unannotated.
 
 ==============================================================================
-7. CONFIGURATION                                    *hex-outdated-configuration*
+7. LOCK CONTEXT                                               *hex-outdated-lock*
+
+By default hex-outdated reads only `mix.exs`. When a `mix.lock` is present it
+can also surface what is actually locked, kept secondary so the inline
+requirement status stays primary:
+
+  - Detail float: `:HexOutdated info` (or press K on a dependency line) shows
+    requirement / locked / latest for the dependency under the cursor.
+  - Lens: `:HexOutdated lock` toggles a `locked X / latest Y` line under each
+    dependency (off by default).
+  - Stale-lock diagnostic: a warning when `mix.lock` holds a version that no
+    longer satisfies your requirement (e.g. after you tighten it), prompting a
+    `mix deps.get`.
+
+All of this no-ops when there is no `mix.lock`. Disable it entirely with
+`lock = { enabled = false }`. The K binding only acts on dependency lines and
+otherwise falls through to LSP hover / 'keywordprg'; set `popup.hover_key`
+to false to leave K alone.
+
+==============================================================================
+8. CONFIGURATION                                    *hex-outdated-configuration*
 
 `setup` merges your options over the defaults: >lua
     require("hex-outdated").setup({
@@ -124,6 +150,11 @@ clauses) are left unannotated.
         ttl_seconds = 3600,
         error_ttl_seconds = 60, -- how long a failed fetch is cached before retry
       },
+      lock = {
+        enabled = true,          -- read mix.lock when present
+        lens = false,            -- show the locked-version lens by default
+        stale_diagnostic = true, -- warn when the lock no longer satisfies req
+      },
       text = {                   -- %s is the latest version
         up_to_date = "✓ %s",
         upgradable = "↑ %s",
@@ -131,6 +162,8 @@ clauses) are left unannotated.
         invalid = "✗ no such version",
         loading = "…",
         error = "fetch error",
+        lock_behind = "locked %s · latest %s",
+        lock_current = "locked %s · up to date",
       },
       highlight = {              -- highlight group per status
         up_to_date = "HexOutdatedUpToDate",
@@ -139,14 +172,16 @@ clauses) are left unannotated.
         invalid = "HexOutdatedInvalid",
         loading = "HexOutdatedLoading",
         error = "HexOutdatedError",
+        lock = "HexOutdatedLock",
+        lock_behind = "HexOutdatedLockBehind",
       },
-      popup = { border = "rounded", max_height = 20 },
+      popup = { border = "rounded", max_height = 20, hover_key = "K" },
       -- opt-in buffer-local keymaps (unset by default):
       keymaps = {}, -- e.g. { upgrade = "<leader>cu", versions = "<leader>cv", open = "<leader>co" }
     })
 <
 ==============================================================================
-8. HIGHLIGHT GROUPS                                     *hex-outdated-highlights*
+9. HIGHLIGHT GROUPS                                     *hex-outdated-highlights*
 
 Highlight groups link to `Diagnostic*` by default and respect your colorscheme
 if you define them first:
@@ -157,21 +192,24 @@ if you define them first:
   HexOutdatedInvalid
   HexOutdatedLoading
   HexOutdatedError
+  HexOutdatedLock
+  HexOutdatedLockBehind
 
 ==============================================================================
-9. HEALTH                                                   *hex-outdated-health*
+10. HEALTH                                                  *hex-outdated-health*
 
 Run |:checkhealth| hex-outdated to verify Neovim version, `curl`, and the
 `elixir` Treesitter parser.
 
 ==============================================================================
-10. HOW IT WORKS                                      *hex-outdated-how-it-works*
+11. HOW IT WORKS                                      *hex-outdated-how-it-works*
 
 `mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find top-level
 dependency tuples and their requirement strings. For each Hex dependency the
 plugin asynchronously queries `https://hex.pm/api/packages/:name` (cached),
 then compares your requirement against the published versions to classify it.
-Current state is read from `mix.exs` itself — no `mix.lock` and no shelling out
-to `mix`.
+The requirement status comes from `mix.exs` alone; `mix.lock` is read locally
+only for the optional lock context (see |hex-outdated-lock|). There is no
+shelling out to `mix`.
 
 vim:tw=78:ts=8:noet:ft=help:norl:
