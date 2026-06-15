@@ -1,0 +1,60 @@
+local version = require("hex-outdated.version")
+
+describe("version.parse", function()
+	it("parses a full semver", function()
+		local v = version.parse("1.7.14")
+		assert.are.equal(1, v.major)
+		assert.are.equal(7, v.minor)
+		assert.are.equal(14, v.patch)
+		assert.are.equal(3, v.precision)
+		assert.is_nil(v.pre)
+	end)
+
+	it("records lower precision and defaults missing parts to 0", function()
+		local v = version.parse("1.6")
+		assert.are.equal(6, v.minor)
+		assert.are.equal(0, v.patch)
+		assert.are.equal(2, v.precision)
+	end)
+
+	it("captures pre-release and strips build metadata", function()
+		local v = version.parse("2.0.0-rc.1+build5")
+		assert.are.equal("rc.1", v.pre)
+		assert.are.equal(2, v.major)
+	end)
+
+	it("returns nil for garbage", function()
+		assert.is_nil(version.parse("not-a-version"))
+	end)
+end)
+
+describe("version.compare", function()
+	local p = version.parse
+	it("orders by major/minor/patch", function()
+		assert.are.equal(-1, version.compare(p("1.2.3"), p("1.3.0")))
+		assert.are.equal(1, version.compare(p("2.0.0"), p("1.9.9")))
+		assert.are.equal(0, version.compare(p("1.0.0"), p("1.0.0")))
+	end)
+	it("treats a pre-release as lower than its release", function()
+		assert.are.equal(-1, version.compare(p("1.0.0-rc.1"), p("1.0.0")))
+	end)
+end)
+
+describe("version.satisfies", function()
+	local p = version.parse
+	local req = version.parse_requirement
+	it("handles ~> two-component upper bound", function()
+		assert.is_true(version.satisfies(req("~> 1.6"), p("1.7.14"))) -- < 2.0.0
+		assert.is_false(version.satisfies(req("~> 1.6"), p("2.0.0")))
+		assert.is_false(version.satisfies(req("~> 1.6"), p("1.5.0")))
+	end)
+	it("handles ~> three-component upper bound", function()
+		assert.is_true(version.satisfies(req("~> 1.6.2"), p("1.6.9"))) -- < 1.7.0
+		assert.is_false(version.satisfies(req("~> 1.6.2"), p("1.7.0")))
+	end)
+	it("handles comparison operators and bare exact", function()
+		assert.is_true(version.satisfies(req(">= 1.0.0"), p("2.5.0")))
+		assert.is_true(version.satisfies(req("== 1.2.3"), p("1.2.3")))
+		assert.is_false(version.satisfies(req("1.2.3"), p("1.2.4")))
+	end)
+end)
