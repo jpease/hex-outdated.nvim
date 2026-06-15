@@ -165,4 +165,62 @@ function M.versions(bufnr, dep, fetch)
 	end)
 end
 
+--- Open a read-only detail float for `dep` (requirement / locked / latest).
+--- `fetch(name, cb)` is injected to resolve `latest` when it is not yet known.
+function M.info(dep, fetch)
+	if not dep then
+		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
+		return
+	end
+	local origin = vim.api.nvim_get_current_buf()
+
+	local function open()
+		vim.schedule(function()
+			local lines = M._info_lines(dep)
+			local buf = vim.api.nvim_create_buf(false, true)
+			if buf == 0 then
+				return
+			end
+			vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+			vim.bo[buf].modifiable = false
+			vim.bo[buf].bufhidden = "wipe"
+			vim.bo[buf].filetype = "hex-outdated-info"
+			local width = 24
+			for _, l in ipairs(lines) do
+				width = math.max(width, #l + 2)
+			end
+			local win = vim.api.nvim_open_win(buf, false, {
+				relative = "cursor",
+				row = 1,
+				col = 0,
+				width = width,
+				height = #lines,
+				border = config.options.popup.border,
+				style = "minimal",
+			})
+			-- Hover-style: close as soon as the user moves or leaves.
+			vim.api.nvim_create_autocmd({ "CursorMoved", "BufLeave", "InsertEnter" }, {
+				buffer = origin,
+				once = true,
+				callback = function()
+					if vim.api.nvim_win_is_valid(win) then
+						vim.api.nvim_win_close(win, true)
+					end
+				end,
+			})
+		end)
+	end
+
+	if dep.latest or dep.status == "invalid" then
+		open()
+	else
+		fetch(dep.name, function(res)
+			if res and res.latest then
+				dep.latest = res.latest
+			end
+			open()
+		end)
+	end
+end
+
 return M
