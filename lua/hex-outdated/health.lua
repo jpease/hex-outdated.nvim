@@ -45,7 +45,11 @@ function M.check()
 		health.error("`curl` not found on PATH", "Install curl; hex.pm requests are made via curl.")
 	end
 
-	if pcall(vim.treesitter.language.add, "elixir") then
+	-- `language.add` signals "not found" by returning `nil, err` (without raising)
+	-- on modern Neovim, and by raising on older versions; require a truthy return,
+	-- not merely a successful pcall, or a missing parser is reported as present.
+	local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
+	if added_ok and added then
 		health.ok("`elixir` Treesitter parser available")
 	else
 		health.warn(
