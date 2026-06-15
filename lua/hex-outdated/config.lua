@@ -36,7 +36,6 @@ M.options = util.deep_merge(M.defaults, {})
 
 function M.setup(opts)
 	M.options = util.deep_merge(M.defaults, opts or {})
-	return M.options
 end
 
 return M
