@@ -6,6 +6,9 @@ local ns = vim.api.nvim_create_namespace("hex_outdated_virt")
 local diag_ns = vim.api.nvim_create_namespace("hex_outdated_diag")
 
 function M.clear(bufnr)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		return
+	end
 	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
 	vim.diagnostic.reset(diag_ns, bufnr)
 end
@@ -30,26 +33,31 @@ function M.render(bufnr, items)
 	end
 	M.clear(bufnr)
 	local opts = config.options
+	local line_count = vim.api.nvim_buf_line_count(bufnr)
 	local diagnostics = {}
 	for _, item in ipairs(items) do
-		local hl = opts.highlight[item.status] or "Comment"
-		vim.api.nvim_buf_set_extmark(bufnr, ns, item.row, 0, {
-			virt_text = { { "  " .. label_for(item, opts), hl } },
-			virt_text_pos = "eol",
-		})
-		if item.status == "invalid" then
-			diagnostics[#diagnostics + 1] = {
-				lnum = item.row,
-				col = item.col_start or 0,
-				end_col = item.col_end or (item.col_start or 0),
-				severity = vim.diagnostic.severity.ERROR,
-				message = string.format(
-					"No published version of '%s' matches this requirement (latest: %s)",
-					item.name or "?",
-					item.latest or "unknown"
-				),
-				source = "hex-outdated",
-			}
+		-- Skip stale items pointing past the buffer end (e.g. the file shrank
+		-- between parse and render); set_extmark/diagnostics would otherwise throw.
+		if item.row < line_count then
+			local hl = opts.highlight[item.status] or "Comment"
+			vim.api.nvim_buf_set_extmark(bufnr, ns, item.row, 0, {
+				virt_text = { { "  " .. label_for(item, opts), hl } },
+				virt_text_pos = "eol",
+			})
+			if item.status == "invalid" then
+				diagnostics[#diagnostics + 1] = {
+					lnum = item.row,
+					col = item.col_start or 0,
+					end_col = item.col_end or (item.col_start or 0),
+					severity = vim.diagnostic.severity.ERROR,
+					message = string.format(
+						"No published version of '%s' matches this requirement (latest: %s)",
+						item.name or "?",
+						item.latest or "unknown"
+					),
+					source = "hex-outdated",
+				}
+			end
 		end
 	end
 	vim.diagnostic.set(diag_ns, bufnr, diagnostics, {})
