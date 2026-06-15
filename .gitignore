@@ -4,6 +4,7 @@ nvim.log
 
 # Agent tooling (kept locally, not distributed)
 .agents/
+.claude/
 .codex/
 .raven/
 docs/superpowers/
