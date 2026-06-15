@@ -99,7 +99,8 @@ function M.analyze(bufnr, opts)
 	opts = opts or {}
 	-- Per-buffer `enabled` persists across calls; it is seeded from the global
 	-- config on first analyze and thereafter owned by the buffer (see toggle).
-	local st = M.state[bufnr] or { enabled = config.options.enabled }
+	local st = M.state[bufnr]
+		or { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
 	M.state[bufnr] = st
 	st.deps = parser.parse_buffer(bufnr)
 	local lockmap = {}

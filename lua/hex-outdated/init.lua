@@ -6,7 +6,7 @@ local hex_api = require("hex-outdated.hex_api")
 
 local M = {}
 
-local SUBCOMMANDS = { "refresh", "toggle", "upgrade", "versions", "open" }
+local SUBCOMMANDS = { "refresh", "toggle", "upgrade", "versions", "open", "info", "lock" }
 
 local function is_mixexs(bufnr)
 	return vim.api.nvim_buf_get_name(bufnr):match("mix%.exs$") ~= nil
@@ -51,11 +51,34 @@ function M.versions()
 	end)
 end
 
+function M.info()
+	local _, deps = current_deps()
+	actions.info(actions.dep_at_cursor(deps), function(name, cb)
+		hex_api.get_package(name, core.api_opts(), cb)
+	end)
+end
+
+function M.lock()
+	if not config.options.lock.enabled then
+		vim.notify(
+			"hex-outdated: lock context is disabled (lock.enabled = false)",
+			vim.log.levels.INFO
+		)
+		return
+	end
+	local bufnr = vim.api.nvim_get_current_buf()
+	local st = core.state[bufnr] or { enabled = config.options.enabled }
+	st.lock_lens = not st.lock_lens
+	core.state[bufnr] = st
+	core.refresh_render(bufnr)
+end
+
 local function attach(bufnr)
 	if not is_mixexs(bufnr) then
 		return
 	end
-	core.state[bufnr] = core.state[bufnr] or { enabled = config.options.enabled }
+	core.state[bufnr] = core.state[bufnr]
+		or { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
 	-- Drop per-buffer state when the buffer goes away so state does not accumulate
 	-- across a long session of opening and closing mix.exs files.
 	vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
@@ -93,6 +116,21 @@ local function attach(bufnr)
 				end, config.options.debounce_ms)
 			end,
 		})
+	end
+	local hover = config.options.popup.hover_key
+	if hover then
+		vim.keymap.set("n", hover, function()
+			local b = vim.api.nvim_get_current_buf()
+			local st = core.state[b]
+			local dep = actions.dep_at_cursor(st and st.deps or {})
+			if dep then
+				M.info()
+			elseif #vim.lsp.get_clients({ bufnr = b }) > 0 then
+				vim.lsp.buf.hover()
+			else
+				vim.cmd("normal! K")
+			end
+		end, { buffer = bufnr, desc = "hex-outdated: info / hover" })
 	end
 end
 
