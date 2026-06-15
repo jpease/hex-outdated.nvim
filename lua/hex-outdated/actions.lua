@@ -1,6 +1,18 @@
 local config = require("hex-outdated.config")
+local version = require("hex-outdated.version")
 
 local M = {}
+
+-- The operator to preserve when inserting a version: prefer the classified
+-- `dep.op`, but fall back to parsing the raw requirement so the popup works
+-- even on deps that were never classified (e.g. a fetch failed).
+local function dep_op(dep)
+	if dep.op then
+		return dep.op
+	end
+	local req = dep.requirement and version.parse_requirement(dep.requirement)
+	return req and req.op
+end
 
 --- Return the dep whose row matches the cursor, or nil.
 function M.dep_at_cursor(deps)
@@ -65,6 +77,9 @@ function M.versions(bufnr, dep, fetch)
 		vim.schedule(function()
 			local lines = res.versions -- newest-first per hex.pm ordering
 			local buf = vim.api.nvim_create_buf(false, true)
+			if buf == 0 then
+				return
+			end
 			vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 			vim.bo[buf].modifiable = false
 			local width = 20
@@ -98,7 +113,7 @@ function M.versions(bufnr, dep, fetch)
 						dep.col_start,
 						dep.row,
 						dep.col_end,
-						{ requirement_for(dep.op, selected) }
+						{ requirement_for(dep_op(dep), selected) }
 					)
 				end
 			end, { buffer = buf, nowait = true })
