@@ -1,0 +1,123 @@
+local config = require("hex-outdated.config")
+local core = require("hex-outdated.core")
+local actions = require("hex-outdated.actions")
+local render = require("hex-outdated.render")
+local hex_api = require("hex-outdated.hex_api")
+
+local M = {}
+
+local SUBCOMMANDS = { "refresh", "toggle", "upgrade", "versions", "open" }
+
+local function is_mixexs(bufnr)
+	return vim.api.nvim_buf_get_name(bufnr):match("mix%.exs$") ~= nil
+end
+
+local function current_deps()
+	local bufnr = vim.api.nvim_get_current_buf()
+	local st = core.state[bufnr]
+	return bufnr, st and st.deps or {}
+end
+
+function M.refresh()
+	core.analyze(vim.api.nvim_get_current_buf(), { force = true })
+end
+
+function M.toggle()
+	local bufnr = vim.api.nvim_get_current_buf()
+	local st = core.state[bufnr] or { enabled = config.options.enabled }
+	st.enabled = not st.enabled
+	core.state[bufnr] = st
+	if st.enabled then
+		core.analyze(bufnr)
+	else
+		render.clear(bufnr)
+	end
+end
+
+function M.upgrade()
+	local bufnr, deps = current_deps()
+	actions.upgrade(bufnr, actions.dep_at_cursor(deps))
+end
+
+function M.open()
+	local _, deps = current_deps()
+	actions.open(actions.dep_at_cursor(deps))
+end
+
+function M.versions()
+	local bufnr, deps = current_deps()
+	actions.versions(bufnr, actions.dep_at_cursor(deps), function(name, cb)
+		hex_api.get_package(name, core.api_opts(), cb)
+	end)
+end
+
+local function attach(bufnr)
+	if not is_mixexs(bufnr) then
+		return
+	end
+	core.state[bufnr] = core.state[bufnr] or { enabled = config.options.enabled }
+	for action, lhs in pairs(config.options.keymaps or {}) do
+		if lhs and type(M[action]) == "function" then
+			vim.keymap.set(
+				"n",
+				lhs,
+				M[action],
+				{ buffer = bufnr, desc = "hex-outdated: " .. action }
+			)
+		end
+	end
+	if config.options.enabled then
+		core.analyze(bufnr)
+	end
+	if config.options.auto_update then
+		local timer
+		vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "InsertLeave" }, {
+			buffer = bufnr,
+			callback = function()
+				if timer then
+					timer:stop()
+				end
+				timer = vim.defer_fn(function()
+					if vim.api.nvim_buf_is_valid(bufnr) then
+						core.analyze(bufnr)
+					end
+				end, config.options.debounce_ms)
+			end,
+		})
+	end
+end
+
+function M.setup(opts)
+	config.setup(opts)
+	render.setup_highlights()
+	local group = vim.api.nvim_create_augroup("HexOutdated", { clear = true })
+	vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+		group = group,
+		pattern = "mix.exs",
+		callback = function(args)
+			attach(args.buf)
+		end,
+	})
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_loaded(b) and is_mixexs(b) then
+			attach(b)
+		end
+	end
+	vim.api.nvim_create_user_command("HexOutdated", function(a)
+		local sub = (a.args ~= "" and a.args) or "refresh"
+		if type(M[sub]) == "function" then
+			M[sub]()
+		else
+			vim.notify("hex-outdated: unknown subcommand '" .. sub .. "'", vim.log.levels.ERROR)
+		end
+	end, {
+		nargs = "?",
+		complete = function(arglead)
+			return vim.tbl_filter(function(c)
+				return c:find(arglead, 1, true) == 1
+			end, SUBCOMMANDS)
+		end,
+	})
+end
+
+return M
