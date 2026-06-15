@@ -1,6 +1,10 @@
-# Run the test suite
+# Run the pure busted suite (no Neovim required)
 test:
     busted
+
+# Run the headless-Neovim integration suite
+test-nvim:
+    nvim --headless -u NONE -l test/run.lua
 
 # Run lint checks
 lint:
@@ -15,7 +19,7 @@ fmt-check:
     stylua --check .
 
 # Run the standard local verification set
-check: fmt-check lint test
+check: fmt-check lint test test-nvim
 
 # Install a pre-commit git hook that runs 'just check'
 install-hooks:
