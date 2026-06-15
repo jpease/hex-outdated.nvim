@@ -1,9 +1,17 @@
 # hex-outdated.nvim
 
+[![CI](https://github.com/jpease/hex-outdated.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/jpease/hex-outdated.nvim/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Neovim](https://img.shields.io/badge/Neovim-0.10%2B-57A143?logo=neovim&logoColor=white)](https://neovim.io)
+
 Live "are my Hex deps up to date?" feedback for Elixir `mix.exs`, in the spirit
 of crates.nvim. As you edit `mix.exs`, each dependency's declared version
 requirement is checked against hex.pm: inline virtual text shows the latest
 version and status, and non-existent versions/packages surface as diagnostics.
+
+<!-- Replace with a real screenshot/GIF: capture a mix.exs buffer with your
+     colorscheme, save it to assets/demo.png, and swap the block below for:
+     ![hex-outdated.nvim in action](assets/demo.png) -->
 
 ```
 defp deps do
@@ -15,6 +23,17 @@ defp deps do
   ]
 end
 ```
+
+## Features
+
+- Live inline virtual text as you edit `mix.exs` — no `:command` needed
+- Status at a glance: up to date, upgradable, outdated pin, or non-existent
+- Non-existent versions/packages also surface as real `vim.diagnostic` entries
+- One-key actions: upgrade the requirement under the cursor, browse published
+  versions, or open the package on hex.pm
+- Treesitter parsing with a dependency-free Lua-pattern fallback
+- Reads `mix.exs` directly — no `mix.lock` and no shelling out to `mix`
+- Async, cached hex.pm requests; configurable text, highlights, and keymaps
 
 ## Requirements
 
@@ -167,3 +186,7 @@ just lint    # luacheck
 
 Pure logic (`version`, the fallback parser, `util`) is unit-tested with busted;
 the Neovim-coupled modules are verified against a headless Neovim.
+
+## License
+
+[MIT](LICENSE) © Justin Pease
