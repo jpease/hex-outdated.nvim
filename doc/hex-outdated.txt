@@ -1,0 +1,149 @@
+*hex-outdated.txt*    Live "are my Hex deps up to date?" feedback for mix.exs
+
+==============================================================================
+CONTENTS                                                  *hex-outdated-contents*
+
+  1. Introduction ......................... |hex-outdated-introduction|
+  2. Requirements ......................... |hex-outdated-requirements|
+  3. Installation ......................... |hex-outdated-installation|
+  4. Usage ................................ |hex-outdated-usage|
+  5. Commands ............................. |hex-outdated-commands|
+  6. Status meanings ...................... |hex-outdated-status|
+  7. Configuration ........................ |hex-outdated-configuration|
+  8. Highlight groups ..................... |hex-outdated-highlights|
+  9. Health ............................... |hex-outdated-health|
+  10. How it works ........................ |hex-outdated-how-it-works|
+
+==============================================================================
+1. INTRODUCTION                                       *hex-outdated-introduction*
+
+hex-outdated.nvim gives live "are my Hex deps up to date?" feedback for Elixir
+`mix.exs`, in the spirit of crates.nvim. As you edit `mix.exs`, each
+dependency's declared version requirement is checked against hex.pm: inline
+virtual text shows the latest version and status, and non-existent
+versions/packages surface as diagnostics.
+
+==============================================================================
+2. REQUIREMENTS                                       *hex-outdated-requirements*
+
+- Neovim 0.10+
+- `curl` on PATH
+- (Recommended) the `elixir` Treesitter parser (`:TSInstall elixir`); a
+  Lua-pattern fallback is used if it is missing.
+
+Run |:checkhealth| hex-outdated to verify these.
+
+==============================================================================
+3. INSTALLATION                                       *hex-outdated-installation*
+
+With lazy.nvim: >lua
+    {
+      "jpease/hex-outdated.nvim",
+      ft = "elixir",
+      opts = {},
+    }
+<
+With packer.nvim: >lua
+    use({
+      "jpease/hex-outdated.nvim",
+      config = function()
+        require("hex-outdated").setup({})
+      end,
+    })
+<
+==============================================================================
+4. USAGE                                                     *hex-outdated-usage*
+
+Open a `mix.exs` — status appears automatically and updates as you type.
+
+The actions are exposed as Lua functions so you can bind your own keys: >lua
+    local hex = require("hex-outdated")
+    -- hex.refresh() / hex.toggle() / hex.upgrade() / hex.versions() / hex.open()
+<
+==============================================================================
+5. COMMANDS                                               *hex-outdated-commands*
+
+                                                                  *:HexOutdated*
+:HexOutdated [{subcommand}]
+    Run an action. Bare `:HexOutdated` is equivalent to `refresh`.
+
+    refresh   Re-fetch, bypassing the cache.
+    toggle    Enable/disable the inline display for the current buffer.
+    upgrade   Rewrite the requirement under the cursor to the latest published
+              version.
+    versions  Floating window of published versions; <CR> inserts the selected
+              one, q / <Esc> closes.
+    open      Open the package's page on hex.pm in a browser.
+
+==============================================================================
+6. STATUS MEANINGS                                          *hex-outdated-status*
+
+  up_to_date  The requirement already allows the latest stable release.
+  upgradable  A newer minor/major exists than your requirement targets.
+  outdated    An exact pin (`==`) that is below the latest release.
+  invalid     No published version matches the requirement (also a diagnostic).
+
+Git/path deps and requirements the plugin can't analyze (combined `and`/`or`
+clauses) are left unannotated.
+
+==============================================================================
+7. CONFIGURATION                                    *hex-outdated-configuration*
+
+`setup` merges your options over the defaults: >lua
+    require("hex-outdated").setup({
+      enabled = true,
+      auto_update = true,        -- re-analyze on buffer changes
+      debounce_ms = 500,
+      api = { base_url = "https://hex.pm/api", timeout_ms = 5000 },
+      cache = { ttl_seconds = 3600 },
+      text = {                   -- %s is the latest version
+        up_to_date = "✓ %s",
+        upgradable = "↑ %s",
+        outdated = "↓ %s",
+        invalid = "✗ no such version",
+        loading = "…",
+        error = "fetch error",
+      },
+      highlight = {              -- highlight group per status
+        up_to_date = "HexOutdatedUpToDate",
+        upgradable = "HexOutdatedUpgradable",
+        outdated = "HexOutdatedOutdated",
+        invalid = "HexOutdatedInvalid",
+        loading = "HexOutdatedLoading",
+        error = "HexOutdatedError",
+      },
+      popup = { border = "rounded", max_height = 20 },
+      -- opt-in buffer-local keymaps (unset by default):
+      keymaps = {}, -- e.g. { upgrade = "<leader>cu", versions = "<leader>cv", open = "<leader>co" }
+    })
+<
+==============================================================================
+8. HIGHLIGHT GROUPS                                     *hex-outdated-highlights*
+
+Highlight groups link to `Diagnostic*` by default and respect your colorscheme
+if you define them first:
+
+  HexOutdatedUpToDate
+  HexOutdatedUpgradable
+  HexOutdatedOutdated
+  HexOutdatedInvalid
+  HexOutdatedLoading
+  HexOutdatedError
+
+==============================================================================
+9. HEALTH                                                   *hex-outdated-health*
+
+Run |:checkhealth| hex-outdated to verify Neovim version, `curl`, and the
+`elixir` Treesitter parser.
+
+==============================================================================
+10. HOW IT WORKS                                      *hex-outdated-how-it-works*
+
+`mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find top-level
+dependency tuples and their requirement strings. For each Hex dependency the
+plugin asynchronously queries `https://hex.pm/api/packages/:name` (cached),
+then compares your requirement against the published versions to classify it.
+Current state is read from `mix.exs` itself — no `mix.lock` and no shelling out
+to `mix`.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
