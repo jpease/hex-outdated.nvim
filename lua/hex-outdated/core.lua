@@ -22,14 +22,9 @@ function M.api_opts(extra)
 	return opts
 end
 
--- Rebuild render items from current dep state (hex deps only).
-function M.refresh_render(bufnr)
-	local st = M.state[bufnr]
-	if not st or not st.enabled then
-		return
-	end
+local function render_items_for_deps(deps)
 	local items = {}
-	for _, dep in ipairs(st.deps or {}) do
+	for _, dep in ipairs(deps or {}) do
 		-- "unknown" = a requirement we can't analyze (e.g. combined `and`/`or`
 		-- clauses); render nothing for it rather than a misleading indicator.
 		if dep.kind == "hex" and dep.status ~= "unknown" then
@@ -44,7 +39,32 @@ function M.refresh_render(bufnr)
 			}
 		end
 	end
-	render.render(bufnr, items)
+	return items
+end
+
+local function package_result_patch(dep, res)
+	if res.error then
+		return { status = res.not_found and "invalid" or "error" }
+	end
+	local c = version.classify(dep.requirement, res.versions or {})
+	return {
+		status = c.status,
+		latest = c.latest,
+		suggested = c.suggested,
+		op = c.op,
+	}
+end
+
+M._render_items_for_deps = render_items_for_deps
+M._package_result_patch = package_result_patch
+
+-- Rebuild render items from current dep state (hex deps only).
+function M.refresh_render(bufnr)
+	local st = M.state[bufnr]
+	if not st or not st.enabled then
+		return
+	end
+	render.render(bufnr, render_items_for_deps(st.deps))
 end
 
 --- Parse the buffer, render loading state, then fetch + classify each hex dep.
@@ -73,14 +93,12 @@ function M.analyze(bufnr, opts)
 				if not cur or not cur.enabled then
 					return
 				end
-				if res.error then
-					dep.status = res.not_found and "invalid" or "error"
-				else
-					local c = version.classify(dep.requirement, res.versions or {})
-					dep.status = c.status -- terminal, incl. "unknown" (rendered as nothing)
-					dep.latest = c.latest
-					dep.suggested = c.suggested
-					dep.op = c.op
+				local patch = package_result_patch(dep, res)
+				dep.status = patch.status -- terminal, incl. "unknown" (rendered as nothing)
+				if not res.error then
+					dep.latest = patch.latest
+					dep.suggested = patch.suggested
+					dep.op = patch.op
 				end
 				M.refresh_render(bufnr)
 			end)
