@@ -1,0 +1,6 @@
+%{
+  "jason": {:hex, :jason, "1.2.0", "demohash", [:mix], [], "hexpm", "demohash"},
+  "phoenix": {:hex, :phoenix, "1.7.0", "demohash", [:mix], [], "hexpm", "demohash"},
+  "ecto": {:hex, :ecto, "3.10.0", "demohash", [:mix], [], "hexpm", "demohash"},
+  "telemetry": {:hex, :telemetry, "1.2.0", "demohash", [:mix], [], "hexpm", "demohash"},
+}

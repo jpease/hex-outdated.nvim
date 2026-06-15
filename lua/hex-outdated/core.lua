@@ -3,6 +3,7 @@ local hex_api = require("hex-outdated.hex_api")
 local version = require("hex-outdated.version")
 local render = require("hex-outdated.render")
 local config = require("hex-outdated.config")
+local lock = require("hex-outdated.lock")
 
 local M = {}
 
@@ -35,9 +36,14 @@ local function render_items_for_deps(deps)
 				col_start = dep.col_start,
 				col_end = dep.col_end,
 				name = dep.name,
+				requirement = dep.requirement,
 				status = dep.status or "loading",
 				latest = dep.latest,
 				suggested = dep.suggested,
+				locked = dep.locked,
+				lock_behind = (dep.locked and dep.latest and lock.behind(dep.locked, dep.latest))
+					or false,
+				lock_out_of_range = dep.lock_out_of_range or false,
 			}
 		end
 	end
@@ -83,7 +89,7 @@ function M.refresh_render(bufnr)
 		render_pending[bufnr] = nil
 		local cur = M.state[bufnr]
 		if cur and cur.enabled and vim.api.nvim_buf_is_valid(bufnr) then
-			render.render(bufnr, render_items_for_deps(cur.deps))
+			render.render(bufnr, render_items_for_deps(cur.deps), { lens = cur.lock_lens })
 		end
 	end)
 end
@@ -93,9 +99,28 @@ function M.analyze(bufnr, opts)
 	opts = opts or {}
 	-- Per-buffer `enabled` persists across calls; it is seeded from the global
 	-- config on first analyze and thereafter owned by the buffer (see toggle).
-	local st = M.state[bufnr] or { enabled = config.options.enabled }
+	local st = M.state[bufnr]
+		or { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
 	M.state[bufnr] = st
 	st.deps = parser.parse_buffer(bufnr)
+	local lockmap = {}
+	if config.options.lock.enabled then
+		local path = lock.find_lock_path(vim.api.nvim_buf_get_name(bufnr))
+		if path then
+			lockmap = lock.load(path)
+		end
+	end
+	for _, dep in ipairs(st.deps) do
+		if dep.kind == "hex" then
+			dep.locked = lockmap[dep.name]
+			dep.lock_out_of_range = (
+				config.options.lock.stale_diagnostic
+				and dep.requirement
+				and dep.locked
+				and lock.out_of_range(dep.requirement, dep.locked)
+			) or false
+		end
+	end
 	if not st.enabled then
 		return
 	end

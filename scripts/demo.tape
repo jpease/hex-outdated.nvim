@@ -41,4 +41,17 @@ Type ":HexOutdated upgrade"
 Enter
 Sleep 3s
 
-Sleep 2s
+# Reveal mix.lock context: toggle the lens (locked vs latest under each dep)...
+Type ":HexOutdated lock"
+Enter
+Sleep 3s
+
+# ...then the detail float for a single dependency.
+Type "/phoenix"
+Enter
+Escape
+Type ":HexOutdated info"
+Enter
+Sleep 3s
+Type "j"
+Sleep 1s

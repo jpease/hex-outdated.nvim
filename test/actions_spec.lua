@@ -66,3 +66,39 @@ describe("actions.versions float", function()
 		vim.api.nvim_win_close(win, true)
 	end)
 end)
+
+describe("actions.info float", function()
+	it("opens a non-focusing float with the detail rows", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = {
+			name = "jason",
+			requirement = "~> 1.0",
+			status = "upgradable",
+			latest = "1.4.5",
+			locked = "1.2.0",
+		}
+		actions.info(dep, function(_, cb)
+			cb({ latest = "1.4.5", versions = { "1.4.5" } })
+		end)
+
+		local function float_win()
+			for _, w in ipairs(vim.api.nvim_list_wins()) do
+				if vim.api.nvim_win_get_config(w).relative ~= "" then
+					return w
+				end
+			end
+		end
+		vim.wait(500, function()
+			return float_win() ~= nil
+		end, 5)
+
+		local win = float_win()
+		truthy(win, "float opened")
+		local fbuf = vim.api.nvim_win_get_buf(win)
+		local lines = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
+		eq("jason", lines[1])
+		eq("hex-outdated-info", vim.bo[fbuf].filetype)
+		vim.api.nvim_win_close(win, true)
+	end)
+end)

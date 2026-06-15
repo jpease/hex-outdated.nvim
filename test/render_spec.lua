@@ -90,3 +90,131 @@ describe("render", function()
 		eq(0, #vim.diagnostic.get(buf), "diagnostics cleared")
 	end)
 end)
+
+describe("render lock context", function()
+	config.setup({})
+	render.setup_highlights()
+
+	local lock_ns = vim.api.nvim_create_namespace("hex_outdated_virt")
+
+	local function lock_fresh_buf(lines)
+		local buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+		return buf
+	end
+
+	it("draws a lens virt_line below a locked dep when lens is on", function()
+		local buf = lock_fresh_buf({ '{:jason, "~> 1.0"},' })
+		render.render(buf, {
+			{
+				row = 0,
+				col_start = 9,
+				col_end = 15,
+				name = "jason",
+				requirement = "~> 1.0",
+				status = "upgradable",
+				latest = "1.4.5",
+				locked = "1.2.0",
+				lock_behind = true,
+			},
+		}, { lens = true })
+		local marks = vim.api.nvim_buf_get_extmarks(buf, lock_ns, 0, -1, { details = true })
+		local found
+		for _, m in ipairs(marks) do
+			if m[4].virt_lines then
+				found = m[4].virt_lines[1][1][1]
+			end
+		end
+		truthy(found, "a virt_line was drawn")
+		contains(found, "locked 1.2.0")
+		contains(found, "1.4.5")
+	end)
+
+	it("does not draw a lens line when lens is off", function()
+		local buf = lock_fresh_buf({ '{:jason, "~> 1.0"},' })
+		render.render(buf, {
+			{
+				row = 0,
+				name = "jason",
+				requirement = "~> 1.0",
+				status = "upgradable",
+				latest = "1.4.5",
+				locked = "1.2.0",
+				lock_behind = true,
+			},
+		}, { lens = false })
+		local marks = vim.api.nvim_buf_get_extmarks(buf, lock_ns, 0, -1, { details = true })
+		for _, m in ipairs(marks) do
+			is_nil(m[4].virt_lines, "no virt_lines")
+		end
+	end)
+
+	it("emits a WARN diagnostic for an out-of-range lock", function()
+		local buf = lock_fresh_buf({ '{:jason, "~> 2.0"},' })
+		render.render(buf, {
+			{
+				row = 0,
+				col_start = 9,
+				col_end = 15,
+				name = "jason",
+				requirement = "~> 2.0",
+				status = "upgradable",
+				latest = "2.1.0",
+				locked = "1.2.0",
+				lock_out_of_range = true,
+			},
+		}, {})
+		local diags = vim.diagnostic.get(buf)
+		eq(1, #diags)
+		eq(vim.diagnostic.severity.WARN, diags[1].severity)
+		contains(diags[1].message, "1.2.0")
+		contains(diags[1].message, "mix deps.get")
+	end)
+
+	local function lens_text(buf)
+		local marks = vim.api.nvim_buf_get_extmarks(
+			buf,
+			vim.api.nvim_create_namespace("hex_outdated_virt"),
+			0,
+			-1,
+			{ details = true }
+		)
+		for _, m in ipairs(marks) do
+			if m[4].virt_lines then
+				return m[4].virt_lines[1][1][1]
+			end
+		end
+	end
+
+	it("shows 'up to date' in the lens when locked equals latest", function()
+		local buf = lock_fresh_buf({ '{:jason, "~> 1.4"},' })
+		render.render(buf, {
+			{
+				row = 0,
+				name = "jason",
+				requirement = "~> 1.4",
+				status = "up_to_date",
+				latest = "1.4.5",
+				locked = "1.4.5",
+				lock_behind = false,
+			},
+		}, { lens = true })
+		contains(lens_text(buf), "up to date")
+	end)
+
+	it("shows only the locked version in the lens while latest is loading", function()
+		local buf = lock_fresh_buf({ '{:jason, "~> 1.0"},' })
+		render.render(buf, {
+			{
+				row = 0,
+				name = "jason",
+				requirement = "~> 1.0",
+				status = "loading",
+				locked = "1.2.0",
+			},
+		}, { lens = true })
+		local text = lens_text(buf)
+		contains(text, "locked 1.2.0")
+		is_nil(text:find("latest", 1, true), "no latest shown while loading")
+	end)
+end)

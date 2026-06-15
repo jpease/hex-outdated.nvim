@@ -1,4 +1,5 @@
 local config = require("hex-outdated.config")
+local lock = require("hex-outdated.lock")
 local version = require("hex-outdated.version")
 
 local M = {}
@@ -12,6 +13,43 @@ local function dep_op(dep)
 	end
 	local req = dep.requirement and version.parse_requirement(dep.requirement)
 	return req and req.op
+end
+
+-- Note describing where the requirement sits relative to the latest release.
+local function requirement_note(status)
+	if status == "up_to_date" then
+		return "allows latest"
+	elseif status == "upgradable" or status == "outdated" then
+		return "below latest"
+	elseif status == "invalid" then
+		return "no published match"
+	end
+	return "checking…"
+end
+
+--- Build the detail-float rows for a dep (pure; no Neovim APIs).
+function M._info_lines(dep)
+	local lines = { dep.name or "?" }
+	local req_note = requirement_note(dep.status)
+	lines[#lines + 1] = string.format("requirement  %s   %s", dep.requirement or "?", req_note)
+	if dep.locked then
+		local note
+		if dep.requirement and lock.out_of_range(dep.requirement, dep.locked) then
+			note = "not satisfied by requirement"
+		elseif dep.latest and lock.behind(dep.locked, dep.latest) then
+			note = "behind latest"
+		elseif dep.latest then
+			note = "up to date"
+		else
+			note = ""
+		end
+		lines[#lines + 1] = string.format("locked       %s   %s", dep.locked, note)
+	else
+		lines[#lines + 1] = "locked       (not in mix.lock)"
+	end
+	local latest_str = dep.latest or (dep.status == "invalid" and "—" or "loading")
+	lines[#lines + 1] = string.format("latest       %s", latest_str)
+	return lines
 end
 
 --- Return the dep whose row matches the cursor, or nil.
@@ -125,6 +163,64 @@ function M.versions(bufnr, dep, fetch)
 			end, { buffer = buf, nowait = true })
 		end)
 	end)
+end
+
+--- Open a read-only detail float for `dep` (requirement / locked / latest).
+--- `fetch(name, cb)` is injected to resolve `latest` when it is not yet known.
+function M.info(dep, fetch)
+	if not dep then
+		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
+		return
+	end
+	local origin = vim.api.nvim_get_current_buf()
+
+	local function open()
+		vim.schedule(function()
+			local lines = M._info_lines(dep)
+			local buf = vim.api.nvim_create_buf(false, true)
+			if buf == 0 then
+				return
+			end
+			vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+			vim.bo[buf].modifiable = false
+			vim.bo[buf].bufhidden = "wipe"
+			vim.bo[buf].filetype = "hex-outdated-info"
+			local width = 24
+			for _, l in ipairs(lines) do
+				width = math.max(width, #l + 2)
+			end
+			local win = vim.api.nvim_open_win(buf, false, {
+				relative = "cursor",
+				row = 1,
+				col = 0,
+				width = width,
+				height = #lines,
+				border = config.options.popup.border,
+				style = "minimal",
+			})
+			-- Hover-style: close as soon as the user moves or leaves.
+			vim.api.nvim_create_autocmd({ "CursorMoved", "BufLeave", "InsertEnter" }, {
+				buffer = origin,
+				once = true,
+				callback = function()
+					if vim.api.nvim_win_is_valid(win) then
+						vim.api.nvim_win_close(win, true)
+					end
+				end,
+			})
+		end)
+	end
+
+	if dep.latest or dep.status == "invalid" then
+		open()
+	else
+		fetch(dep.name, function(res)
+			if res and res.latest then
+				dep.latest = res.latest
+			end
+			open()
+		end)
+	end
 end
 
 return M

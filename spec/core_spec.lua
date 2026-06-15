@@ -62,6 +62,8 @@ describe("core pure helpers", function()
 					col_end = 18,
 					name = "phoenix",
 					status = "loading",
+					lock_behind = false,
+					lock_out_of_range = false,
 				},
 				{
 					row = 4,
@@ -71,6 +73,8 @@ describe("core pure helpers", function()
 					status = "upgradable",
 					latest = "1.4.4",
 					suggested = "~> 1.4",
+					lock_behind = false,
+					lock_out_of_range = false,
 				},
 			}, items)
 		end)
@@ -194,5 +198,66 @@ describe("core.refresh_render coalescing", function()
 		core.refresh_render(2)
 
 		assert.are.equal(0, #scheduled)
+	end)
+end)
+
+describe("core._render_items_for_deps lock fields", function()
+	local old_vim
+	local core
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		_G.vim = {
+			api = {
+				nvim_create_namespace = function()
+					return 1
+				end,
+			},
+		}
+		package.loaded["hex-outdated.render"] = nil
+		package.loaded["hex-outdated.core"] = nil
+		core = require("hex-outdated.core")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.render"] = nil
+		package.loaded["hex-outdated.core"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("carries locked/latest/requirement and computes lock_behind", function()
+		local items = core._render_items_for_deps({
+			{
+				kind = "hex",
+				name = "jason",
+				requirement = "~> 1.0",
+				status = "upgradable",
+				latest = "1.4.5",
+				locked = "1.2.0",
+				row = 3,
+				col_start = 9,
+				col_end = 15,
+			},
+		})
+		assert.are.equal(1, #items)
+		assert.are.equal("1.2.0", items[1].locked)
+		assert.is_true(items[1].lock_behind)
+		assert.are.equal("~> 1.0", items[1].requirement)
+	end)
+
+	it("is false for lock_behind when latest is unknown", function()
+		local items = core._render_items_for_deps({
+			{
+				kind = "hex",
+				name = "x",
+				requirement = "~> 1.0",
+				status = "loading",
+				locked = "1.1.0",
+				row = 0,
+			},
+		})
+		assert.are.equal(1, #items)
+		assert.are.equal("1.1.0", items[1].locked)
+		assert.is_false(items[1].lock_behind)
 	end)
 end)

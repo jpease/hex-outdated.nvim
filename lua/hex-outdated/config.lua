@@ -11,6 +11,11 @@ M.defaults = {
 		timeout_ms = 5000,
 		max_concurrent = 8,
 	},
+	lock = {
+		enabled = true,
+		lens = false,
+		stale_diagnostic = true,
+	},
 	cache = { ttl_seconds = 3600, error_ttl_seconds = 60 },
 	text = {
 		up_to_date = "✓ %s",
@@ -19,6 +24,8 @@ M.defaults = {
 		invalid = "✗ no such version",
 		loading = "…",
 		error = "fetch error",
+		lock_behind = "locked %s · latest %s",
+		lock_current = "locked %s · up to date",
 	},
 	highlight = {
 		up_to_date = "HexOutdatedUpToDate",
@@ -27,8 +34,10 @@ M.defaults = {
 		invalid = "HexOutdatedInvalid",
 		loading = "HexOutdatedLoading",
 		error = "HexOutdatedError",
+		lock = "HexOutdatedLock",
+		lock_behind = "HexOutdatedLockBehind",
 	},
-	popup = { border = "rounded", max_height = 20 },
+	popup = { border = "rounded", max_height = 20, hover_key = "K" },
 	-- opt-in buffer-local keymaps, e.g. { upgrade = "<leader>cu", versions = "<leader>cv" }
 	keymaps = {},
 }

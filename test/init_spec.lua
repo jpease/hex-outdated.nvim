@@ -26,3 +26,17 @@ describe("per-buffer state lifecycle", function()
 		is_nil(core.state[buf], "state cleared after buffer delete")
 	end)
 end)
+
+describe("lock lens toggle", function()
+	it("toggles st.lock_lens for the buffer", function()
+		hex.setup({ enabled = false })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_set_current_buf(buf)
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+		local before = core.state[buf] and core.state[buf].lock_lens or false
+		hex.lock()
+		eq(not before, core.state[buf].lock_lens, "lens flips")
+	end)
+end)
