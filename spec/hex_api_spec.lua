@@ -65,9 +65,19 @@ describe("hex_api pure helpers", function()
 			}, result)
 		end)
 
+		it("describes curl exit codes so failures are actionable", function()
+			local function err_for(code)
+				return hex_api._parse_package_response({ code = code }, function() end, now).error
+			end
+			assert.are.equal("could not resolve hex.pm", err_for(6))
+			assert.are.equal("could not connect to hex.pm", err_for(7))
+			assert.are.equal("request timed out", err_for(28))
+			assert.are.equal("request failed (curl 35)", err_for(35))
+		end)
+
 		it("normalizes request and HTTP failures", function()
 			assert.are.same(
-				{ error = "request failed" },
+				{ error = "could not connect to hex.pm" },
 				hex_api._parse_package_response({ code = 7 }, function() end, now)
 			)
 			assert.are.same(

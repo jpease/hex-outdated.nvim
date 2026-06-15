@@ -40,9 +40,19 @@ local function curl_command(name, opts)
 	}
 end
 
+-- Common curl exit codes, mapped to messages a user can act on. Anything else
+-- keeps the numeric code so it can be looked up.
+local curl_errors = {
+	[6] = "could not resolve hex.pm",
+	[7] = "could not connect to hex.pm",
+	[28] = "request timed out",
+}
+
 local function parse_package_response(obj, decode_json, now)
 	if obj.code ~= 0 then
-		return { error = "request failed" }
+		return {
+			error = curl_errors[obj.code] or ("request failed (curl " .. tostring(obj.code) .. ")"),
+		}
 	end
 	local body, status = (obj.stdout or ""):match("^(.*)\n(%d+)%s*$")
 	status = tonumber(status)
