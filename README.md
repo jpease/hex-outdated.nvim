@@ -9,20 +9,7 @@ of crates.nvim. As you edit `mix.exs`, each dependency's declared version
 requirement is checked against hex.pm: inline virtual text shows the latest
 version and status, and non-existent versions/packages surface as diagnostics.
 
-<!-- Replace with a real screenshot/GIF: capture a mix.exs buffer with your
-     colorscheme, save it to assets/demo.png, and swap the block below for:
-     ![hex-outdated.nvim in action](assets/demo.png) -->
-
-```
-defp deps do
-  [
-    {:jason, "~> 1.0"},        ↑ 1.4.5            (a newer version is available)
-    {:phoenix, "~> 1.8"},      ✓ 1.8.8            (up to date)
-    {:ecto, "== 3.0.0"},       ↓ 3.14.0           (pinned below latest)
-    {:nope, "~> 9.9"},         ✗ no such version  (also a diagnostic)
-  ]
-end
-```
+![hex-outdated.nvim showing inline version status in a mix.exs buffer](assets/demo.gif)
 
 ## Features
 
@@ -185,14 +172,19 @@ state is read from `mix.exs` itself — no `mix.lock` and no shelling out to `mi
 ## Development
 
 ```
-just check   # stylua --check, luacheck, busted
-just test    # busted
-just format  # stylua
-just lint    # luacheck
+just check     # stylua --check, luacheck, busted, headless-nvim suite
+just test      # busted (pure logic, no Neovim)
+just test-nvim # headless-Neovim integration suite
+just format    # stylua
+just lint      # luacheck
 ```
 
-Pure logic (`version`, the fallback parser, `util`) is unit-tested with busted;
-the Neovim-coupled modules are verified against a headless Neovim.
+Pure logic (`version`, the fallback parser, `util`, classification) is unit-tested
+with busted under `spec/`. The Neovim-coupled modules — Treesitter parsing,
+extmark/diagnostic rendering, the curl queue, and buffer actions — are exercised
+against a real headless Neovim under `test/`, run with
+`nvim --headless -u NONE -l test/run.lua` (no busted/luarocks needed). Both
+suites run in CI.
 
 ## License
 
