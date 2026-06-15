@@ -103,3 +103,85 @@ describe("core pure helpers", function()
 		end)
 	end)
 end)
+
+describe("core.refresh_render coalescing", function()
+	local old_vim
+	local core
+	local scheduled
+	local render_calls
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		scheduled = {}
+		render_calls = 0
+		package.loaded["hex-outdated.render"] = {
+			render = function()
+				render_calls = render_calls + 1
+			end,
+			clear = function() end,
+			setup_highlights = function() end,
+		}
+		_G.vim = {
+			api = {
+				nvim_create_namespace = function()
+					return 1
+				end,
+				nvim_buf_is_valid = function()
+					return true
+				end,
+			},
+			schedule = function(fn)
+				scheduled[#scheduled + 1] = fn
+			end,
+		}
+		package.loaded["hex-outdated.core"] = nil
+		core = require("hex-outdated.core")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.render"] = nil
+		package.loaded["hex-outdated.core"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("renders nothing inline and schedules a single tick for many calls", function()
+		core.state[1] = { enabled = true, deps = {} }
+		core.refresh_render(1)
+		core.refresh_render(1)
+		core.refresh_render(1)
+
+		assert.are.equal(0, render_calls)
+		assert.are.equal(1, #scheduled)
+
+		scheduled[1]()
+		assert.are.equal(1, render_calls)
+	end)
+
+	it("schedules a fresh render once the previous tick has flushed", function()
+		core.state[1] = { enabled = true, deps = {} }
+		core.refresh_render(1)
+		scheduled[1]()
+		core.refresh_render(1)
+
+		assert.are.equal(2, #scheduled)
+		scheduled[2]()
+		assert.are.equal(2, render_calls)
+	end)
+
+	it("skips the render if the buffer was disabled before the tick ran", function()
+		core.state[1] = { enabled = true, deps = {} }
+		core.refresh_render(1)
+		core.state[1].enabled = false
+
+		scheduled[1]()
+		assert.are.equal(0, render_calls)
+	end)
+
+	it("does nothing for an unknown or disabled buffer", function()
+		core.refresh_render(99)
+		core.state[2] = { enabled = false, deps = {} }
+		core.refresh_render(2)
+
+		assert.are.equal(0, #scheduled)
+	end)
+end)

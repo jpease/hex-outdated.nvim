@@ -159,10 +159,13 @@ local function truncated_equal(latest, reqver)
 	return true
 end
 
---- Classify a requirement string against a list of published version strings.
---- Returns { status, latest?, suggested?, op? } where status is one of
---- "up_to_date" | "upgradable" | "outdated" | "invalid" | "unknown".
-function M.classify(req_str, published)
+-- Memoized classification results, keyed first by the `published` table identity
+-- (weak, so an entry is collected once its version list is no longer referenced)
+-- then by requirement string. Hot paths re-classify the same cached version list
+-- on every edit; without this each call re-parses every published version string.
+local classify_memo = setmetatable({}, { __mode = "k" })
+
+local function compute_classify(req_str, published)
 	local req = M.parse_requirement(req_str)
 	if not req then
 		return { status = "unknown" }
@@ -214,6 +217,30 @@ function M.classify(req_str, published)
 	else
 		result.status = "up_to_date"
 	end
+	return result
+end
+
+--- Classify a requirement string against a list of published version strings.
+--- Returns { status, latest?, suggested?, op? } where status is one of
+--- "up_to_date" | "upgradable" | "outdated" | "invalid" | "unknown".
+--- Results are memoized per (published list identity, requirement); callers must
+--- treat the returned table as read-only and not mutate it.
+function M.classify(req_str, published)
+	if type(req_str) ~= "string" then
+		return compute_classify(req_str, published or {})
+	end
+	published = published or {}
+	local by_req = classify_memo[published]
+	if by_req == nil then
+		by_req = {}
+		classify_memo[published] = by_req
+	end
+	local cached = by_req[req_str]
+	if cached ~= nil then
+		return cached
+	end
+	local result = compute_classify(req_str, published)
+	by_req[req_str] = result
 	return result
 end
 

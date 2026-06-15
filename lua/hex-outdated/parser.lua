@@ -37,6 +37,17 @@ end
 -- a keywords node) are not matched.
 local TS_QUERY = "(tuple (atom) @name (string) @req)"
 
+-- The query is a constant, but `parse_buffer` runs on every (debounced) edit.
+-- Compile it once and reuse; `query.parse` is not free per call.
+local compiled_query
+local function get_query()
+	if compiled_query == nil then
+		local ok, query = pcall(vim.treesitter.query.parse, "elixir", TS_QUERY)
+		compiled_query = ok and query or false
+	end
+	return compiled_query or nil
+end
+
 local warned = false
 local function warn_once(msg)
 	if not warned then
@@ -56,8 +67,8 @@ local function parse_treesitter(bufnr)
 	if not tree then
 		return nil
 	end
-	local query_ok, query = pcall(vim.treesitter.query.parse, "elixir", TS_QUERY)
-	if not query_ok then
+	local query = get_query()
+	if not query then
 		return nil
 	end
 	local deps = {}

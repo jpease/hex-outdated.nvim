@@ -58,13 +58,29 @@ end
 M._render_items_for_deps = render_items_for_deps
 M._package_result_patch = package_result_patch
 
--- Rebuild render items from current dep state (hex deps only).
+-- Buffers with a render scheduled for the next tick. A single analyze can request
+-- many renders in one tick (every cached dep resolves synchronously, and bursts of
+-- responses arrive close together); coalescing collapses N full re-renders into one.
+local render_pending = {}
+
+-- Rebuild render items from current dep state (hex deps only). Renders are
+-- coalesced onto the next event-loop tick rather than running inline.
 function M.refresh_render(bufnr)
 	local st = M.state[bufnr]
 	if not st or not st.enabled then
 		return
 	end
-	render.render(bufnr, render_items_for_deps(st.deps))
+	if render_pending[bufnr] then
+		return
+	end
+	render_pending[bufnr] = true
+	vim.schedule(function()
+		render_pending[bufnr] = nil
+		local cur = M.state[bufnr]
+		if cur and cur.enabled and vim.api.nvim_buf_is_valid(bufnr) then
+			render.render(bufnr, render_items_for_deps(cur.deps))
+		end
+	end)
 end
 
 --- Parse the buffer, render loading state, then fetch + classify each hex dep.

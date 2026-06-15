@@ -48,3 +48,64 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal("~> 1.6", line:sub(deps[1].col_start + 1, deps[1].col_end))
 	end)
 end)
+
+describe("parser.parse_buffer treesitter query caching", function()
+	local old_vim
+	local ts_parser
+	local query_parse_calls
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		query_parse_calls = 0
+		local fake_query = {
+			captures = {},
+			-- empty iterator: no deps, keeps the test focused on compile count
+			iter_captures = function()
+				return function()
+					return nil
+				end
+			end,
+		}
+		local fake_tree = {
+			root = function()
+				return {}
+			end,
+		}
+		local lang_tree = {
+			parse = function()
+				return { fake_tree }
+			end,
+		}
+		_G.vim = {
+			treesitter = {
+				get_parser = function()
+					return lang_tree
+				end,
+				query = {
+					parse = function()
+						query_parse_calls = query_parse_calls + 1
+						return fake_query
+					end,
+				},
+				get_node_text = function()
+					return ""
+				end,
+			},
+		}
+		package.loaded["hex-outdated.parser"] = nil
+		ts_parser = require("hex-outdated.parser")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.parser"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("compiles the query only once across repeated parses", function()
+		assert.are.same({}, ts_parser.parse_buffer(1))
+		assert.are.same({}, ts_parser.parse_buffer(1))
+		assert.are.same({}, ts_parser.parse_buffer(2))
+
+		assert.are.equal(1, query_parse_calls)
+	end)
+end)
