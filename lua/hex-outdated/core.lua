@@ -89,7 +89,7 @@ function M.refresh_render(bufnr)
 		render_pending[bufnr] = nil
 		local cur = M.state[bufnr]
 		if cur and cur.enabled and vim.api.nvim_buf_is_valid(bufnr) then
-			render.render(bufnr, render_items_for_deps(cur.deps))
+			render.render(bufnr, render_items_for_deps(cur.deps), { lens = cur.lock_lens })
 		end
 	end)
 end
@@ -102,6 +102,24 @@ function M.analyze(bufnr, opts)
 	local st = M.state[bufnr] or { enabled = config.options.enabled }
 	M.state[bufnr] = st
 	st.deps = parser.parse_buffer(bufnr)
+	local lockmap = {}
+	if config.options.lock.enabled then
+		local path = lock.find_lock_path(vim.api.nvim_buf_get_name(bufnr))
+		if path then
+			lockmap = lock.load(path)
+		end
+	end
+	for _, dep in ipairs(st.deps) do
+		if dep.kind == "hex" then
+			dep.locked = lockmap[dep.name]
+			dep.lock_out_of_range = (
+				config.options.lock.stale_diagnostic
+				and dep.requirement
+				and dep.locked
+				and lock.out_of_range(dep.requirement, dep.locked)
+			) or false
+		end
+	end
 	if not st.enabled then
 		return
 	end
