@@ -65,9 +65,19 @@ describe("hex_api pure helpers", function()
 			}, result)
 		end)
 
+		it("describes curl exit codes so failures are actionable", function()
+			local function err_for(code)
+				return hex_api._parse_package_response({ code = code }, function() end, now).error
+			end
+			assert.are.equal("could not resolve hex.pm", err_for(6))
+			assert.are.equal("could not connect to hex.pm", err_for(7))
+			assert.are.equal("request timed out", err_for(28))
+			assert.are.equal("request failed (curl 35)", err_for(35))
+		end)
+
 		it("normalizes request and HTTP failures", function()
 			assert.are.same(
-				{ error = "request failed" },
+				{ error = "could not connect to hex.pm" },
 				hex_api._parse_package_response({ code = 7 }, function() end, now)
 			)
 			assert.are.same(
@@ -186,5 +196,179 @@ describe("api.get_package in-flight coalescing", function()
 		-- force bypasses the fresh cache and, with no in-flight request, re-spawns
 		api.get_package("jason", { ttl_seconds = 3600, force = true }, function() end)
 		assert.are.equal(2, system_calls)
+	end)
+
+	it("serves last-known-good versions when a refetch fails", function()
+		api.get_package("jason", { ttl_seconds = 3600 }, function() end)
+		complete_last() -- success: caches versions { "1.4.4" }
+
+		local res
+		api.get_package("jason", { ttl_seconds = 3600, force = true }, function(r)
+			res = r
+		end)
+		exits[#exits]({ code = 0, stdout = "{}\n503" }) -- refetch fails
+
+		assert.is_truthy(res.error) -- the failure is still recorded
+		assert.is_true(res.stale)
+		assert.are.same({ "1.4.4" }, res.versions) -- but the good data survives
+	end)
+end)
+
+describe("api.get_package concurrency cap", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return { releases = {} }
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("queues fetches beyond the cap and drains them on completion", function()
+		api.get_package("a", { max_concurrent = 1 }, function() end)
+		api.get_package("b", { max_concurrent = 1 }, function() end)
+
+		assert.are.equal(1, system_calls) -- "b" is queued behind "a"
+
+		exits[#exits]({ code = 0, stdout = "body\n200" }) -- "a" finishes
+
+		assert.are.equal(2, system_calls) -- the queue drains and "b" starts
+	end)
+end)
+
+describe("api.get_package negative caching", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return {}
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	local function complete_error()
+		exits[#exits]({ code = 0, stdout = "{}\n503" })
+	end
+
+	it("serves a recent failure from cache instead of re-spawning", function()
+		api.get_package("jason", { error_ttl_seconds = 60 }, function() end)
+		complete_error()
+
+		local res
+		api.get_package("jason", { error_ttl_seconds = 60 }, function(r)
+			res = r
+		end)
+
+		assert.are.equal(1, system_calls) -- the cached failure is still fresh
+		assert.is_truthy(res.error)
+	end)
+
+	it("re-spawns when negative caching is disabled (error_ttl_seconds = 0)", function()
+		api.get_package("jason", { error_ttl_seconds = 0 }, function() end)
+		complete_error()
+		api.get_package("jason", { error_ttl_seconds = 0 }, function() end)
+
+		assert.are.equal(2, system_calls)
+	end)
+end)
+
+describe("api.get_package spawn failure", function()
+	local old_vim
+	local api
+	local system_calls
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		_G.vim = {
+			system = function()
+				system_calls = system_calls + 1
+				error("ENOENT: curl not found") -- libuv raises when the process can't spawn
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return {}
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("delivers an error to the callback instead of raising", function()
+		local result
+		api.get_package("jason", {}, function(r)
+			result = r
+		end)
+
+		assert.is_truthy(result)
+		assert.is_truthy(result.error)
+	end)
+
+	it("clears the in-flight entry so a forced retry can re-spawn", function()
+		api.get_package("jason", {}, function() end)
+		local retried
+		api.get_package("jason", { force = true }, function(r)
+			retried = r
+		end)
+
+		assert.are.equal(2, system_calls) -- not poisoned: the second call attempts again
+		assert.is_truthy(retried.error)
 	end)
 end)

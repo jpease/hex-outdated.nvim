@@ -91,6 +91,17 @@ describe("core pure helpers", function()
 			)
 		end)
 
+		it("classifies stale results that still carry the versions", function()
+			local patch = core._package_result_patch({ requirement = "~> 1.6" }, {
+				error = "http 503",
+				stale = true,
+				versions = { "1.6.0", "1.7.14" },
+			})
+
+			assert.are.equal("upgradable", patch.status)
+			assert.are.equal("1.7.14", patch.latest)
+		end)
+
 		it("classifies successful package results", function()
 			local patch = core._package_result_patch({ requirement = "~> 1.6" }, {
 				versions = { "1.6.0", "1.6.16", "1.7.14" },

@@ -12,8 +12,17 @@ function M.clear_cache()
 	cache = {}
 end
 
-local function fresh(entry, ttl)
-	return entry and not entry.error and (os.time() - (entry.time or 0)) < ttl
+local function fresh(entry, ttl, error_ttl)
+	if not entry then
+		return false
+	end
+	local age = os.time() - (entry.time or 0)
+	-- A cached failure is fresh for a shorter window so a failing/unreachable
+	-- hex.pm is retried at a bounded rate instead of on every debounce cycle.
+	if entry.error then
+		return age < (error_ttl or 0)
+	end
+	return age < ttl
 end
 
 local function curl_command(name, opts)
@@ -31,9 +40,19 @@ local function curl_command(name, opts)
 	}
 end
 
+-- Common curl exit codes, mapped to messages a user can act on. Anything else
+-- keeps the numeric code so it can be looked up.
+local curl_errors = {
+	[6] = "could not resolve hex.pm",
+	[7] = "could not connect to hex.pm",
+	[28] = "request timed out",
+}
+
 local function parse_package_response(obj, decode_json, now)
 	if obj.code ~= 0 then
-		return { error = "request failed" }
+		return {
+			error = curl_errors[obj.code] or ("request failed (curl " .. tostring(obj.code) .. ")"),
+		}
 	end
 	local body, status = (obj.stdout or ""):match("^(.*)\n(%d+)%s*$")
 	status = tonumber(status)
@@ -65,14 +84,76 @@ end
 M._curl_command = curl_command
 M._parse_package_response = parse_package_response
 
+-- Bound on simultaneously running curl processes. A mix.exs with many deps would
+-- otherwise spawn one process per dep at once, which is heavy and amplifies a retry
+-- storm against a failing upstream. Set from opts; unlimited until configured.
+local in_flight = 0
+local max_concurrent = math.huge
+local queue = {} -- FIFO of { name, opts } waiting for a slot
+
+local pump -- forward declaration
+
+local function spawn(name, opts)
+	in_flight = in_flight + 1
+	local cmd = curl_command(name, opts)
+
+	local function deliver(result)
+		if result.error then
+			-- Errors carry no time of their own; stamp one so negative caching can age them.
+			result.time = result.time or os.time()
+			-- Serve stale-but-good data through a transient failure rather than
+			-- flipping the dep to an error indicator. The cached failure still ages
+			-- out via negative caching, so we retry once the window passes.
+			local prev = cache[name]
+			if prev and prev.versions and #prev.versions > 0 then
+				result.versions = prev.versions
+				result.latest = prev.latest
+				result.stale = true
+			end
+		end
+		cache[name] = result
+		local callbacks = pending[name]
+		pending[name] = nil
+		in_flight = in_flight - 1
+		pump()
+		vim.schedule(function()
+			for _, cb in ipairs(callbacks) do
+				cb(result)
+			end
+		end)
+	end
+
+	-- vim.system raises if the process can't be spawned (e.g. curl missing). Without
+	-- this guard the error escapes analyze and `pending[name]` is never cleared, so
+	-- the package stays "loading" forever and future fetches ride a request that
+	-- never resolves.
+	local ok, err = pcall(vim.system, cmd, { text = true }, function(obj)
+		deliver(parse_package_response(obj, vim.json.decode, os.time))
+	end)
+	if not ok then
+		deliver({ error = "could not run curl: " .. tostring(err) })
+	end
+end
+
+function pump()
+	while in_flight < max_concurrent and #queue > 0 do
+		local item = table.remove(queue, 1)
+		spawn(item.name, item.opts)
+	end
+end
+
 --- Fetch package release info from hex.pm.
---- opts: { base_url, timeout_ms, ttl_seconds, force }
+--- opts: { base_url, timeout_ms, ttl_seconds, error_ttl_seconds, max_concurrent, force }
 --- callback receives { versions = {strings}, latest = string, time = epoch }
 --- or { error = msg, not_found? }.
 function M.get_package(name, opts, callback)
 	opts = opts or {}
 	local ttl = opts.ttl_seconds or 3600
-	if not opts.force and fresh(cache[name], ttl) then
+	local error_ttl = opts.error_ttl_seconds or 0
+	if opts.max_concurrent then
+		max_concurrent = opts.max_concurrent
+	end
+	if not opts.force and fresh(cache[name], ttl, error_ttl) then
 		callback(cache[name])
 		return
 	end
@@ -85,19 +166,11 @@ function M.get_package(name, opts, callback)
 		return
 	end
 	pending[name] = { callback }
-	local cmd = curl_command(name, opts)
-
-	vim.system(cmd, { text = true }, function(obj)
-		local result = parse_package_response(obj, vim.json.decode, os.time)
-		cache[name] = result
-		local callbacks = pending[name]
-		pending[name] = nil
-		vim.schedule(function()
-			for _, cb in ipairs(callbacks) do
-				cb(result)
-			end
-		end)
-	end)
+	if in_flight < max_concurrent then
+		spawn(name, opts)
+	else
+		queue[#queue + 1] = { name = name, opts = opts }
+	end
 end
 
 return M

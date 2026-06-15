@@ -1,0 +1,15 @@
+local health = require("hex-outdated.health")
+
+describe("health._reachability_verdict", function()
+	it("reports ok when the probe succeeds (curl exit 0)", function()
+		local level, msg = health._reachability_verdict(0)
+		assert.are.equal("ok", level)
+		assert.is_truthy(msg:find("hex.pm", 1, true))
+	end)
+
+	it("warns with the curl exit code when the probe fails", function()
+		local level, msg = health._reachability_verdict(7)
+		assert.are.equal("warn", level)
+		assert.is_truthy(msg:find("7", 1, true))
+	end)
+end)
