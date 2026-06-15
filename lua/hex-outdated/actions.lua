@@ -82,6 +82,10 @@ function M.versions(bufnr, dep, fetch)
 			end
 			vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 			vim.bo[buf].modifiable = false
+			-- Wipe the scratch buffer when its window closes so it does not linger,
+			-- and give it a filetype so colorschemes/statusline can target it.
+			vim.bo[buf].bufhidden = "wipe"
+			vim.bo[buf].filetype = "hex-outdated-versions"
 			local width = 20
 			for _, l in ipairs(lines) do
 				width = math.max(width, #l + 2)
@@ -96,6 +100,8 @@ function M.versions(bufnr, dep, fetch)
 				border = config.options.popup.border,
 				style = "minimal",
 			})
+			-- Highlight the active row so the selection target is obvious.
+			vim.wo[win].cursorline = true
 			local function close()
 				if vim.api.nvim_win_is_valid(win) then
 					vim.api.nvim_win_close(win, true)
