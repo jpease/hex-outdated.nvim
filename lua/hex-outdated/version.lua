@@ -35,6 +35,45 @@ function M.parse(str)
 	}
 end
 
+-- Compare two pre-release strings per semver §11: split on ".", then compare
+-- identifiers left to right. Numeric identifiers compare numerically and rank
+-- below alphanumeric ones; alphanumeric identifiers compare lexically (ASCII).
+-- When all shared identifiers are equal, the longer list wins (more fields =
+-- higher precedence). This avoids the lexical trap where "rc.10" sorts before
+-- "rc.2".
+local function split_dots(s)
+	local parts = {}
+	for id in (s .. "."):gmatch("([^%.]*)%.") do
+		parts[#parts + 1] = id
+	end
+	return parts
+end
+
+local function compare_prerelease(a, b)
+	local ai, bi = split_dots(a), split_dots(b)
+	for i = 1, math.max(#ai, #bi) do
+		local x, y = ai[i], bi[i]
+		if x == nil then
+			return -1 -- a ran out of identifiers first: lower precedence
+		elseif y == nil then
+			return 1
+		end
+		local xn, yn = tonumber(x:match("^%d+$")), tonumber(y:match("^%d+$"))
+		if xn and yn then
+			if xn ~= yn then
+				return xn < yn and -1 or 1
+			end
+		elseif xn then
+			return -1 -- numeric identifiers rank below alphanumeric
+		elseif yn then
+			return 1
+		elseif x ~= y then
+			return x < y and -1 or 1
+		end
+	end
+	return 0
+end
+
 --- Compare two parsed versions: -1, 0, or 1.
 function M.compare(a, b)
 	for _, k in ipairs({ "major", "minor", "patch" }) do
@@ -51,12 +90,7 @@ function M.compare(a, b)
 	if b.pre == nil then
 		return -1
 	end
-	if a.pre < b.pre then
-		return -1
-	elseif a.pre > b.pre then
-		return 1
-	end
-	return 0
+	return compare_prerelease(a.pre, b.pre)
 end
 
 function M.is_stable(v)

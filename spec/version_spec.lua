@@ -65,6 +65,38 @@ describe("version.compare", function()
 	it("treats a pre-release as lower than its release", function()
 		assert.are.equal(-1, version.compare(p("1.0.0-rc.1"), p("1.0.0")))
 	end)
+	it("orders numeric pre-release identifiers numerically, not lexically", function()
+		-- The lexical trap: "rc.10" must rank above "rc.2".
+		assert.are.equal(1, version.compare(p("1.0.0-rc.10"), p("1.0.0-rc.2")))
+		assert.are.equal(-1, version.compare(p("1.0.0-alpha.2"), p("1.0.0-alpha.10")))
+	end)
+	it("ranks numeric identifiers below alphanumeric ones", function()
+		assert.are.equal(-1, version.compare(p("1.0.0-1"), p("1.0.0-alpha")))
+	end)
+	it("ranks a longer identifier list higher when the prefix is equal", function()
+		-- semver §11: 1.0.0-alpha < 1.0.0-alpha.1
+		assert.are.equal(-1, version.compare(p("1.0.0-alpha"), p("1.0.0-alpha.1")))
+		assert.are.equal(1, version.compare(p("1.0.0-alpha.beta"), p("1.0.0-alpha")))
+	end)
+	it("follows the semver §11 precedence chain", function()
+		local chain = {
+			"1.0.0-alpha",
+			"1.0.0-alpha.1",
+			"1.0.0-alpha.beta",
+			"1.0.0-beta",
+			"1.0.0-beta.2",
+			"1.0.0-beta.11",
+			"1.0.0-rc.1",
+			"1.0.0",
+		}
+		for i = 1, #chain - 1 do
+			assert.are.equal(
+				-1,
+				version.compare(p(chain[i]), p(chain[i + 1])),
+				chain[i] .. " < " .. chain[i + 1]
+			)
+		end
+	end)
 end)
 
 describe("version.satisfies", function()
