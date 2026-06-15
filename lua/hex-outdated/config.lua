@@ -9,6 +9,7 @@ M.defaults = {
 	api = {
 		base_url = "https://hex.pm/api",
 		timeout_ms = 5000,
+		max_concurrent = 8,
 	},
 	cache = { ttl_seconds = 3600, error_ttl_seconds = 60 },
 	text = {

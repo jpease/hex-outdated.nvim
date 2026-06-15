@@ -204,6 +204,52 @@ describe("api.get_package in-flight coalescing", function()
 	end)
 end)
 
+describe("api.get_package concurrency cap", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return { releases = {} }
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("queues fetches beyond the cap and drains them on completion", function()
+		api.get_package("a", { max_concurrent = 1 }, function() end)
+		api.get_package("b", { max_concurrent = 1 }, function() end)
+
+		assert.are.equal(1, system_calls) -- "b" is queued behind "a"
+
+		exits[#exits]({ code = 0, stdout = "body\n200" }) -- "a" finishes
+
+		assert.are.equal(2, system_calls) -- the queue drains and "b" starts
+	end)
+end)
+
 describe("api.get_package negative caching", function()
 	local old_vim
 	local api

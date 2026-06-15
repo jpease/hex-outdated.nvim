@@ -14,6 +14,7 @@ function M.api_opts(extra)
 	local opts = {
 		base_url = o.api.base_url,
 		timeout_ms = o.api.timeout_ms,
+		max_concurrent = o.api.max_concurrent,
 		ttl_seconds = o.cache.ttl_seconds,
 		error_ttl_seconds = o.cache.error_ttl_seconds,
 	}

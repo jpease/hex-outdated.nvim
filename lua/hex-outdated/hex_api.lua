@@ -74,27 +74,17 @@ end
 M._curl_command = curl_command
 M._parse_package_response = parse_package_response
 
---- Fetch package release info from hex.pm.
---- opts: { base_url, timeout_ms, ttl_seconds, force }
---- callback receives { versions = {strings}, latest = string, time = epoch }
---- or { error = msg, not_found? }.
-function M.get_package(name, opts, callback)
-	opts = opts or {}
-	local ttl = opts.ttl_seconds or 3600
-	local error_ttl = opts.error_ttl_seconds or 0
-	if not opts.force and fresh(cache[name], ttl, error_ttl) then
-		callback(cache[name])
-		return
-	end
-	-- Already fetching this package: ride the in-flight request rather than
-	-- spawning another curl. The running request is hitting the network now, so
-	-- its result is fresh enough to satisfy a concurrent force as well.
-	local waiters = pending[name]
-	if waiters then
-		waiters[#waiters + 1] = callback
-		return
-	end
-	pending[name] = { callback }
+-- Bound on simultaneously running curl processes. A mix.exs with many deps would
+-- otherwise spawn one process per dep at once, which is heavy and amplifies a retry
+-- storm against a failing upstream. Set from opts; unlimited until configured.
+local in_flight = 0
+local max_concurrent = math.huge
+local queue = {} -- FIFO of { name, opts } waiting for a slot
+
+local pump -- forward declaration
+
+local function spawn(name, opts)
+	in_flight = in_flight + 1
 	local cmd = curl_command(name, opts)
 
 	local function deliver(result)
@@ -114,6 +104,8 @@ function M.get_package(name, opts, callback)
 		cache[name] = result
 		local callbacks = pending[name]
 		pending[name] = nil
+		in_flight = in_flight - 1
+		pump()
 		vim.schedule(function()
 			for _, cb in ipairs(callbacks) do
 				cb(result)
@@ -130,6 +122,44 @@ function M.get_package(name, opts, callback)
 	end)
 	if not ok then
 		deliver({ error = "could not run curl: " .. tostring(err) })
+	end
+end
+
+function pump()
+	while in_flight < max_concurrent and #queue > 0 do
+		local item = table.remove(queue, 1)
+		spawn(item.name, item.opts)
+	end
+end
+
+--- Fetch package release info from hex.pm.
+--- opts: { base_url, timeout_ms, ttl_seconds, error_ttl_seconds, max_concurrent, force }
+--- callback receives { versions = {strings}, latest = string, time = epoch }
+--- or { error = msg, not_found? }.
+function M.get_package(name, opts, callback)
+	opts = opts or {}
+	local ttl = opts.ttl_seconds or 3600
+	local error_ttl = opts.error_ttl_seconds or 0
+	if opts.max_concurrent then
+		max_concurrent = opts.max_concurrent
+	end
+	if not opts.force and fresh(cache[name], ttl, error_ttl) then
+		callback(cache[name])
+		return
+	end
+	-- Already fetching this package: ride the in-flight request rather than
+	-- spawning another curl. The running request is hitting the network now, so
+	-- its result is fresh enough to satisfy a concurrent force as well.
+	local waiters = pending[name]
+	if waiters then
+		waiters[#waiters + 1] = callback
+		return
+	end
+	pending[name] = { callback }
+	if in_flight < max_concurrent then
+		spawn(name, opts)
+	else
+		queue[#queue + 1] = { name = name, opts = opts }
 	end
 end
 
