@@ -3,6 +3,11 @@ local M = {}
 -- name -> { versions = {...}, latest = "x.y.z", time = epoch } | { error = msg, not_found = bool }
 local cache = {}
 
+-- name -> list of callbacks waiting on an in-flight request for that package.
+-- A debounced analyze re-fires while earlier fetches are still running; without
+-- this, each cycle would spawn a duplicate curl for every not-yet-cached dep.
+local pending = {}
+
 function M.clear_cache()
 	cache = {}
 end
@@ -71,13 +76,26 @@ function M.get_package(name, opts, callback)
 		callback(cache[name])
 		return
 	end
+	-- Already fetching this package: ride the in-flight request rather than
+	-- spawning another curl. The running request is hitting the network now, so
+	-- its result is fresh enough to satisfy a concurrent force as well.
+	local waiters = pending[name]
+	if waiters then
+		waiters[#waiters + 1] = callback
+		return
+	end
+	pending[name] = { callback }
 	local cmd = curl_command(name, opts)
 
 	vim.system(cmd, { text = true }, function(obj)
 		local result = parse_package_response(obj, vim.json.decode, os.time)
 		cache[name] = result
+		local callbacks = pending[name]
+		pending[name] = nil
 		vim.schedule(function()
-			callback(result)
+			for _, cb in ipairs(callbacks) do
+				cb(result)
+			end
 		end)
 	end)
 end

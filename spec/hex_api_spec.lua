@@ -108,3 +108,83 @@ describe("hex_api pure helpers", function()
 		end)
 	end)
 end)
+
+describe("api.get_package in-flight coalescing", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn() -- run synchronously so tests can assert without a real loop
+			end,
+			json = {
+				decode = function()
+					return { releases = { { version = "1.4.4" } }, latest_stable_version = "1.4.4" }
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	-- Drive the most-recently-spawned curl to completion with a 200 response.
+	local function complete_last()
+		exits[#exits]({ code = 0, stdout = "body\n200" })
+	end
+
+	it("spawns one process for concurrent fetches of the same package", function()
+		local results = {}
+		local function collect(r)
+			results[#results + 1] = r
+		end
+		api.get_package("jason", { ttl_seconds = 3600 }, collect)
+		api.get_package("jason", { ttl_seconds = 3600 }, collect)
+
+		assert.are.equal(1, system_calls)
+		assert.are.equal(0, #results) -- neither resolves until curl returns
+
+		complete_last()
+
+		assert.are.equal(2, #results)
+		assert.are.equal(results[1], results[2]) -- both get the same result table
+		assert.are.same({ "1.4.4" }, results[1].versions)
+	end)
+
+	it("serves a later fetch from cache without spawning again", function()
+		api.get_package("jason", { ttl_seconds = 3600 }, function() end)
+		complete_last()
+
+		local cached
+		api.get_package("jason", { ttl_seconds = 3600 }, function(r)
+			cached = r
+		end)
+
+		assert.are.equal(1, system_calls)
+		assert.are.same({ "1.4.4" }, cached.versions)
+	end)
+
+	it("spawns again once the previous request has finished", function()
+		api.get_package("jason", { ttl_seconds = 3600 }, function() end)
+		complete_last()
+
+		-- force bypasses the fresh cache and, with no in-flight request, re-spawns
+		api.get_package("jason", { ttl_seconds = 3600, force = true }, function() end)
+		assert.are.equal(2, system_calls)
+	end)
+end)
