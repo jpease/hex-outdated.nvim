@@ -1,2 +1,9 @@
+# Generated / local artifacts
 .gitnexus/
 nvim.log
+
+# Agent tooling (kept locally, not distributed)
+.agents/
+.codex/
+.raven/
+docs/superpowers/
