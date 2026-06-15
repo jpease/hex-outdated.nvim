@@ -170,4 +170,51 @@ describe("render lock context", function()
 		contains(diags[1].message, "1.2.0")
 		contains(diags[1].message, "mix deps.get")
 	end)
+
+	local function lens_text(buf)
+		local marks = vim.api.nvim_buf_get_extmarks(
+			buf,
+			vim.api.nvim_create_namespace("hex_outdated_virt"),
+			0,
+			-1,
+			{ details = true }
+		)
+		for _, m in ipairs(marks) do
+			if m[4].virt_lines then
+				return m[4].virt_lines[1][1][1]
+			end
+		end
+	end
+
+	it("shows 'up to date' in the lens when locked equals latest", function()
+		local buf = lock_fresh_buf({ '{:jason, "~> 1.4"},' })
+		render.render(buf, {
+			{
+				row = 0,
+				name = "jason",
+				requirement = "~> 1.4",
+				status = "up_to_date",
+				latest = "1.4.5",
+				locked = "1.4.5",
+				lock_behind = false,
+			},
+		}, { lens = true })
+		contains(lens_text(buf), "up to date")
+	end)
+
+	it("shows only the locked version in the lens while latest is loading", function()
+		local buf = lock_fresh_buf({ '{:jason, "~> 1.0"},' })
+		render.render(buf, {
+			{
+				row = 0,
+				name = "jason",
+				requirement = "~> 1.0",
+				status = "loading",
+				locked = "1.2.0",
+			},
+		}, { lens = true })
+		local text = lens_text(buf)
+		contains(text, "locked 1.2.0")
+		is_nil(text:find("latest", 1, true), "no latest shown while loading")
+	end)
 end)
