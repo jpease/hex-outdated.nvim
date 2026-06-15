@@ -13,7 +13,9 @@ function M.parse(str)
 		s = main
 		pre = prerelease
 	end
-	if not s:match("^%d+(%.%d+)*$") then -- reject trailing/empty dot groups like "1.." or "1.2."
+	-- Must be digit-led, digits/dots only, with no empty dot groups ("1..") or
+	-- trailing dot ("1.2."). Lua patterns can't quantify groups, so check explicitly.
+	if not s:match("^%d[%d%.]*$") or s:find("%.%.") or s:sub(-1) == "." then
 		return nil
 	end
 	local parts = {}
