@@ -138,8 +138,15 @@ require("hex-outdated").setup({
   enabled = true,
   auto_update = true,        -- re-analyze on buffer changes
   debounce_ms = 500,
-  api = { base_url = "https://hex.pm/api", timeout_ms = 5000 },
-  cache = { ttl_seconds = 3600 },
+  api = {
+    base_url = "https://hex.pm/api",
+    timeout_ms = 5000,
+    max_concurrent = 8,        -- cap on simultaneous curl processes
+  },
+  cache = {
+    ttl_seconds = 3600,
+    error_ttl_seconds = 60,    -- how long a failed fetch is cached before retry
+  },
   text = {                   -- %s is the latest version
     up_to_date = "✓ %s",
     upgradable = "↑ %s",
