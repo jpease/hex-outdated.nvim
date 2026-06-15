@@ -44,10 +44,13 @@ local function render_items_for_deps(deps)
 end
 
 local function package_result_patch(dep, res)
-	if res.error then
+	local versions = res.versions
+	-- A stale result keeps its versions through a transient error; classify those
+	-- rather than showing an error. Only a failure with no usable data is terminal.
+	if res.error and not (versions and #versions > 0) then
 		return { status = res.not_found and "invalid" or "error" }
 	end
-	local c = version.classify(dep.requirement, res.versions or {})
+	local c = version.classify(dep.requirement, versions or {})
 	return {
 		status = c.status,
 		latest = c.latest,
@@ -111,12 +114,12 @@ function M.analyze(bufnr, opts)
 					return
 				end
 				local patch = package_result_patch(dep, res)
+				-- Copy all classified fields: on a hard error they are nil, and on a
+				-- stale result they reflect the retained last-known-good versions.
 				dep.status = patch.status -- terminal, incl. "unknown" (rendered as nothing)
-				if not res.error then
-					dep.latest = patch.latest
-					dep.suggested = patch.suggested
-					dep.op = patch.op
-				end
+				dep.latest = patch.latest
+				dep.suggested = patch.suggested
+				dep.op = patch.op
 				M.refresh_render(bufnr)
 			end)
 		end

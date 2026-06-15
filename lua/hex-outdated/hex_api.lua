@@ -98,9 +98,18 @@ function M.get_package(name, opts, callback)
 	local cmd = curl_command(name, opts)
 
 	local function deliver(result)
-		-- Errors carry no time of their own; stamp one so negative caching can age them.
-		if result.error and not result.time then
-			result.time = os.time()
+		if result.error then
+			-- Errors carry no time of their own; stamp one so negative caching can age them.
+			result.time = result.time or os.time()
+			-- Serve stale-but-good data through a transient failure rather than
+			-- flipping the dep to an error indicator. The cached failure still ages
+			-- out via negative caching, so we retry once the window passes.
+			local prev = cache[name]
+			if prev and prev.versions and #prev.versions > 0 then
+				result.versions = prev.versions
+				result.latest = prev.latest
+				result.stale = true
+			end
 		end
 		cache[name] = result
 		local callbacks = pending[name]
