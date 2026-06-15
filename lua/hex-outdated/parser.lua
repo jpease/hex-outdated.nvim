@@ -32,4 +32,66 @@ function M.parse_lines(lines)
 	return deps
 end
 
+-- Direct-child (atom) then (string) inside a tuple. Because the string must be a
+-- *direct* child of the tuple, keyword values like github: "owner/repo" (nested in
+-- a keywords node) are not matched.
+local TS_QUERY = "(tuple (atom) @name (string) @req)"
+
+local warned = false
+local function warn_once(msg)
+	if not warned then
+		warned = true
+		vim.schedule(function()
+			vim.notify("hex-outdated: " .. msg, vim.log.levels.WARN)
+		end)
+	end
+end
+
+local function parse_treesitter(bufnr)
+	local ok, lang_tree = pcall(vim.treesitter.get_parser, bufnr, "elixir")
+	if not ok or not lang_tree then
+		return nil
+	end
+	local tree = lang_tree:parse()[1]
+	if not tree then
+		return nil
+	end
+	local query_ok, query = pcall(vim.treesitter.query.parse, "elixir", TS_QUERY)
+	if not query_ok then
+		return nil
+	end
+	local deps = {}
+	local current
+	-- iter_captures(node, source, start_row, end_row): yields capture id + node in
+	-- document order, so each @name precedes its sibling @req within a tuple.
+	for id, node in query:iter_captures(tree:root(), bufnr, 0, -1) do
+		local capture = query.captures[id]
+		local text = vim.treesitter.get_node_text(node, bufnr)
+		if capture == "name" then
+			current = { name = (text:gsub("^:", "")), kind = "hex" }
+		elseif capture == "req" and current then
+			local srow, scol, _, ecol = node:range()
+			current.requirement = text:gsub('^"', ""):gsub('"$', "")
+			current.row = srow
+			current.col_start = scol + 1 -- inside opening quote
+			current.col_end = ecol - 1 -- before closing quote
+			deps[#deps + 1] = current
+			current = nil
+		end
+	end
+	return deps
+end
+
+--- Parse deps from a buffer. Uses Treesitter when the elixir parser is available,
+--- otherwise falls back to the pure line parser.
+function M.parse_buffer(bufnr)
+	local deps = parse_treesitter(bufnr)
+	if deps == nil then
+		warn_once("Treesitter elixir parser unavailable; using pattern fallback")
+		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		return M.parse_lines(lines)
+	end
+	return deps
+end
+
 return M
