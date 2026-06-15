@@ -46,6 +46,37 @@ use({
 })
 ```
 
+With [mini.deps](https://github.com/echasnovski/mini.deps):
+
+```lua
+MiniDeps.add({ source = "jpease/hex-outdated.nvim" })
+require("hex-outdated").setup({})
+```
+
+With [vim-plug](https://github.com/junegunn/vim-plug):
+
+```vim
+Plug 'jpease/hex-outdated.nvim'
+" after plug#end():
+lua require("hex-outdated").setup({})
+```
+
+As a native package (no plugin manager):
+
+```sh
+git clone https://github.com/jpease/hex-outdated.nvim \
+  ~/.config/nvim/pack/plugins/start/hex-outdated.nvim
+```
+
+```lua
+-- in your init.lua
+require("hex-outdated").setup({})
+```
+
+Every manager other than lazy.nvim's `opts = {}` needs an explicit
+`require("hex-outdated").setup({})` call — the plugin activates entirely through
+`setup()`.
+
 ## Usage
 
 Open a `mix.exs` — status appears automatically and updates as you type.
