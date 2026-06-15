@@ -38,4 +38,33 @@ function M.out_of_range(requirement_str, locked_str)
 	return not version.satisfies(req, locked)
 end
 
+-- Strip the last "/component" from a POSIX-style path.
+local function dirname(path)
+	return (path:gsub("/[^/]*$", ""))
+end
+
+--- Locate the mix.lock governing `mix_exs_path`: sibling first, then the nearest
+--- ancestor directory (umbrella apps share one root lock). `exists` defaults to
+--- a vim.uv stat check and is injectable for tests. Returns the path or nil.
+function M.find_lock_path(mix_exs_path, exists)
+	exists = exists or function(p)
+		return vim.uv.fs_stat(p) ~= nil
+	end
+	if type(mix_exs_path) ~= "string" or mix_exs_path == "" then
+		return nil
+	end
+	local dir = dirname(mix_exs_path)
+	while true do
+		local candidate = dir .. "/mix.lock"
+		if exists(candidate) then
+			return candidate
+		end
+		local parent = dirname(dir)
+		if parent == dir or parent == "" then
+			return nil
+		end
+		dir = parent
+	end
+end
+
 return M

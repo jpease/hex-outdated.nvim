@@ -56,3 +56,31 @@ describe("lock.out_of_range", function()
 		assert.is_false(lock.out_of_range(">= 1.0.0 and < 2.0.0", "0.9.0"))
 	end)
 end)
+
+describe("lock.find_lock_path", function()
+	-- exists predicate over a fixed set of present files.
+	local function present(set)
+		return function(p)
+			return set[p] == true
+		end
+	end
+
+	it("finds mix.lock next to mix.exs", function()
+		local exists = present({ ["/proj/mix.lock"] = true })
+		assert.are.equal("/proj/mix.lock", lock.find_lock_path("/proj/mix.exs", exists))
+	end)
+
+	it("walks up to a parent lock (umbrella apps)", function()
+		local exists = present({ ["/proj/mix.lock"] = true })
+		assert.are.equal("/proj/mix.lock", lock.find_lock_path("/proj/apps/web/mix.exs", exists))
+	end)
+
+	it("returns nil when no lock exists in any ancestor", function()
+		assert.is_nil(lock.find_lock_path("/proj/apps/web/mix.exs", present({})))
+	end)
+
+	it("returns nil for empty/non-string input", function()
+		assert.is_nil(lock.find_lock_path("", present({})))
+		assert.is_nil(lock.find_lock_path(nil, present({})))
+	end)
+end)
