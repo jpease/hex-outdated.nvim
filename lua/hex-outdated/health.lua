@@ -1,9 +1,34 @@
+local config = require("hex-outdated.config")
+
 local M = {}
 
-local health = vim.health
+-- Translate a curl exit code from the reachability probe into a health verdict.
+-- Exit 0 means hex.pm answered (DNS + connect + response); anything else is a
+-- warning rather than an error since the plugin still works from cache offline.
+local function reachability_verdict(code)
+	if code == 0 then
+		return "ok", "hex.pm is reachable"
+	end
+	return "warn", "hex.pm is not reachable (curl exit " .. tostring(code) .. ")"
+end
+
+M._reachability_verdict = reachability_verdict
+
+-- Probe the configured API host, blocking briefly. Safe to block here because
+-- :checkhealth is an explicit, interactive command.
+local function probe_hex()
+	local base = config.options.api.base_url
+	local timeout_s = math.max(1, math.floor((config.options.api.timeout_ms or 5000) / 1000))
+	local out = vim.system(
+		{ "curl", "-sS", "-o", "/dev/null", "--max-time", tostring(timeout_s), base },
+		{ text = true }
+	):wait()
+	return out.code
+end
 
 --- `:checkhealth hex-outdated` — verify the runtime dependencies the plugin needs.
 function M.check()
+	local health = vim.health
 	health.start("hex-outdated")
 
 	if vim.fn.has("nvim-0.10") == 1 then
@@ -14,6 +39,8 @@ function M.check()
 
 	if vim.fn.executable("curl") == 1 then
 		health.ok("`curl` found on PATH")
+		local level, msg = reachability_verdict(probe_hex())
+		health[level](msg)
 	else
 		health.error("`curl` not found on PATH", "Install curl; hex.pm requests are made via curl.")
 	end
