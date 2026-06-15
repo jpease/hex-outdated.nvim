@@ -188,3 +188,56 @@ describe("api.get_package in-flight coalescing", function()
 		assert.are.equal(2, system_calls)
 	end)
 end)
+
+describe("api.get_package spawn failure", function()
+	local old_vim
+	local api
+	local system_calls
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		_G.vim = {
+			system = function()
+				system_calls = system_calls + 1
+				error("ENOENT: curl not found") -- libuv raises when the process can't spawn
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return {}
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("delivers an error to the callback instead of raising", function()
+		local result
+		api.get_package("jason", {}, function(r)
+			result = r
+		end)
+
+		assert.is_truthy(result)
+		assert.is_truthy(result.error)
+	end)
+
+	it("clears the in-flight entry so a forced retry can re-spawn", function()
+		api.get_package("jason", {}, function() end)
+		local retried
+		api.get_package("jason", { force = true }, function(r)
+			retried = r
+		end)
+
+		assert.are.equal(2, system_calls) -- not poisoned: the second call attempts again
+		assert.is_truthy(retried.error)
+	end)
+end)

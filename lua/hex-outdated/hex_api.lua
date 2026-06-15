@@ -87,8 +87,7 @@ function M.get_package(name, opts, callback)
 	pending[name] = { callback }
 	local cmd = curl_command(name, opts)
 
-	vim.system(cmd, { text = true }, function(obj)
-		local result = parse_package_response(obj, vim.json.decode, os.time)
+	local function deliver(result)
 		cache[name] = result
 		local callbacks = pending[name]
 		pending[name] = nil
@@ -97,7 +96,18 @@ function M.get_package(name, opts, callback)
 				cb(result)
 			end
 		end)
+	end
+
+	-- vim.system raises if the process can't be spawned (e.g. curl missing). Without
+	-- this guard the error escapes analyze and `pending[name]` is never cleared, so
+	-- the package stays "loading" forever and future fetches ride a request that
+	-- never resolves.
+	local ok, err = pcall(vim.system, cmd, { text = true }, function(obj)
+		deliver(parse_package_response(obj, vim.json.decode, os.time))
 	end)
+	if not ok then
+		deliver({ error = "could not run curl: " .. tostring(err) })
+	end
 end
 
 return M
