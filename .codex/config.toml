@@ -1,0 +1,22 @@
+# Raven Codex project configuration for Lua repositories.
+# Project-local Codex config loads only after the project .codex layer is trusted.
+
+[agents]
+max_threads = 4
+max_depth = 1
+
+[mcp_servers.semgrep]
+command = "semgrep"
+args = ["mcp"]
+
+[mcp_servers.semble]
+command = "uvx"
+args = ["--from", "semble[mcp]", "semble"]
+
+[mcp_servers.gitnexus]
+command = "gitnexus"
+args = ["mcp"]
+
+[mcp_servers.lsp]
+command = "mcp-language-server"
+args = ["--workspace", ".", "--lsp", "lua-language-server"]

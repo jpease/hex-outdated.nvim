@@ -1,0 +1,5 @@
+# Raven starter StyLua configuration for Lua.
+# Minimal by design: indentation is left at StyLua's default because Lua indent
+# style is not standardized. See https://github.com/JohnnyMorganz/StyLua for options.
+column_width = 100
+line_endings = "Unix"
