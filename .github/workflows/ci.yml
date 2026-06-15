@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  stylua:
+    name: stylua
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --check .
+
+  lint-test:
+    name: luacheck + busted
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.4"
+      - uses: leafo/gh-actions-luarocks@v4
+      - name: Install tools
+        run: |
+          luarocks install luacheck
+          luarocks install busted
+      - name: Lint
+        run: luacheck .
+      - name: Test
+        run: busted
