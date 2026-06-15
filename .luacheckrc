@@ -4,3 +4,5 @@ std = "lua54"
 max_line_length = 100
 unused_args = false
 globals = { "vim" }
+-- Skip the locally installed luarocks tree (vendored deps installed in CI).
+exclude_files = { ".luarocks" }
