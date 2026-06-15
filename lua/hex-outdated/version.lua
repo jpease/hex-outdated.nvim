@@ -132,4 +132,89 @@ function M.satisfies(req, v)
 	return false
 end
 
+--- Suggest a replacement requirement string bumping to `latest`, or nil.
+function M.suggested_requirement(req, latest)
+	if req.op == "~>" then
+		if req.version.precision <= 2 then
+			return string.format("~> %d.%d", latest.major, latest.minor)
+		end
+		return string.format("~> %d.%d.%d", latest.major, latest.minor, latest.patch)
+	elseif req.op == "==" then
+		return string.format("== %d.%d.%d", latest.major, latest.minor, latest.patch)
+	end
+	return nil
+end
+
+-- True if `latest`, truncated to the requirement's precision, equals the requirement version.
+local function truncated_equal(latest, reqver)
+	if reqver.precision >= 1 and latest.major ~= reqver.major then
+		return false
+	end
+	if reqver.precision >= 2 and latest.minor ~= reqver.minor then
+		return false
+	end
+	if reqver.precision >= 3 and latest.patch ~= reqver.patch then
+		return false
+	end
+	return true
+end
+
+--- Classify a requirement string against a list of published version strings.
+--- Returns { status, latest?, suggested?, op? } where status is one of
+--- "up_to_date" | "upgradable" | "outdated" | "invalid" | "unknown".
+function M.classify(req_str, published)
+	local req = M.parse_requirement(req_str)
+	if not req then
+		return { status = "unknown" }
+	end
+	local parsed, stables = {}, {}
+	for _, vs in ipairs(published or {}) do
+		local v = M.parse(vs)
+		if v then
+			parsed[#parsed + 1] = v
+			if M.is_stable(v) then
+				stables[#stables + 1] = v
+			end
+		end
+	end
+	local pool = (#stables > 0) and stables or parsed
+	if #pool == 0 then
+		return { status = "invalid", op = req.op }
+	end
+	local latest = pool[1]
+	for _, v in ipairs(pool) do
+		if M.compare(v, latest) > 0 then
+			latest = v
+		end
+	end
+	local sat
+	for _, v in ipairs(pool) do
+		if M.satisfies(req, v) and (not sat or M.compare(v, sat) > 0) then
+			sat = v
+		end
+	end
+	local result = { latest = M.tostring(latest), op = req.op }
+	if not sat then
+		result.status = "invalid"
+		return result
+	end
+	local up_to_date
+	if req.op == "~>" then
+		up_to_date = truncated_equal(latest, req.version)
+	elseif req.op == "==" then
+		up_to_date = M.compare(req.version, latest) == 0
+	else
+		up_to_date = M.compare(sat, latest) == 0
+	end
+	if up_to_date then
+		result.status = "up_to_date"
+	elseif M.compare(latest, req.version) > 0 then
+		result.status = (req.op == "==") and "outdated" or "upgradable"
+		result.suggested = M.suggested_requirement(req, latest)
+	else
+		result.status = "up_to_date"
+	end
+	return result
+end
+
 return M
