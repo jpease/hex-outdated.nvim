@@ -67,4 +67,39 @@ function M.find_lock_path(mix_exs_path, exists)
 	end
 end
 
+-- path -> { mtime = seconds, map = table }. A debounced analyze calls load() on
+-- every cycle; memoizing by mtime avoids re-reading an unchanged file.
+local cache = {}
+
+--- Reset the load cache (used by tests).
+function M.clear_cache()
+	cache = {}
+end
+
+--- Read + parse the lock file at `path`, memoized by mtime. Returns the
+--- name -> version map, or {} when the file is missing or unreadable.
+function M.load(path)
+	if type(path) ~= "string" then
+		return {}
+	end
+	local stat = vim.uv.fs_stat(path)
+	if not stat then
+		return {}
+	end
+	local mtime = stat.mtime.sec
+	local entry = cache[path]
+	if entry and entry.mtime == mtime then
+		return entry.map
+	end
+	local fd = io.open(path, "r")
+	if not fd then
+		return {}
+	end
+	local text = fd:read("*a")
+	fd:close()
+	local map = M.parse(text)
+	cache[path] = { mtime = mtime, map = map }
+	return map
+end
+
 return M
