@@ -8,8 +8,22 @@ local cache = {}
 -- this, each cycle would spawn a duplicate curl for every not-yet-cached dep.
 local pending = {}
 
+-- Concurrency state. `max_concurrent` bounds simultaneously running curl
+-- processes: a mix.exs with many deps would otherwise spawn one process per dep
+-- at once, which is heavy and amplifies a retry storm against a failing upstream.
+-- Set from opts; unlimited until configured.
+local in_flight = 0
+local max_concurrent = math.huge
+local queue = {} -- FIFO of { name, opts } waiting for a slot
+
+-- Reset all module state, not just the cache: a lingering `pending`/`queue`
+-- entry or a non-zero `in_flight` from a previous run would otherwise leak across
+-- a clear and silently throttle or stall the next fetch. (Used by tests.)
 function M.clear_cache()
 	cache = {}
+	pending = {}
+	queue = {}
+	in_flight = 0
 end
 
 local function fresh(entry, ttl, error_ttl)
@@ -83,13 +97,6 @@ end
 
 M._curl_command = curl_command
 M._parse_package_response = parse_package_response
-
--- Bound on simultaneously running curl processes. A mix.exs with many deps would
--- otherwise spawn one process per dep at once, which is heavy and amplifies a retry
--- storm against a failing upstream. Set from opts; unlimited until configured.
-local in_flight = 0
-local max_concurrent = math.huge
-local queue = {} -- FIFO of { name, opts } waiting for a slot
 
 local pump -- forward declaration
 

@@ -56,6 +56,15 @@ local function attach(bufnr)
 		return
 	end
 	core.state[bufnr] = core.state[bufnr] or { enabled = config.options.enabled }
+	-- Drop per-buffer state when the buffer goes away so state does not accumulate
+	-- across a long session of opening and closing mix.exs files.
+	vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
+		buffer = bufnr,
+		once = true,
+		callback = function()
+			core.state[bufnr] = nil
+		end,
+	})
 	for action, lhs in pairs(config.options.keymaps or {}) do
 		if lhs and type(M[action]) == "function" then
 			vim.keymap.set(
