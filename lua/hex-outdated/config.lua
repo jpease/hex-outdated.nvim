@@ -10,7 +10,7 @@ M.defaults = {
 		base_url = "https://hex.pm/api",
 		timeout_ms = 5000,
 	},
-	cache = { ttl_seconds = 3600 },
+	cache = { ttl_seconds = 3600, error_ttl_seconds = 60 },
 	text = {
 		up_to_date = "✓ %s",
 		upgradable = "↑ %s",

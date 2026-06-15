@@ -15,6 +15,7 @@ function M.api_opts(extra)
 		base_url = o.api.base_url,
 		timeout_ms = o.api.timeout_ms,
 		ttl_seconds = o.cache.ttl_seconds,
+		error_ttl_seconds = o.cache.error_ttl_seconds,
 	}
 	for k, v in pairs(extra or {}) do
 		opts[k] = v

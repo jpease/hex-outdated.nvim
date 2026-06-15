@@ -12,8 +12,17 @@ function M.clear_cache()
 	cache = {}
 end
 
-local function fresh(entry, ttl)
-	return entry and not entry.error and (os.time() - (entry.time or 0)) < ttl
+local function fresh(entry, ttl, error_ttl)
+	if not entry then
+		return false
+	end
+	local age = os.time() - (entry.time or 0)
+	-- A cached failure is fresh for a shorter window so a failing/unreachable
+	-- hex.pm is retried at a bounded rate instead of on every debounce cycle.
+	if entry.error then
+		return age < (error_ttl or 0)
+	end
+	return age < ttl
 end
 
 local function curl_command(name, opts)
@@ -72,7 +81,8 @@ M._parse_package_response = parse_package_response
 function M.get_package(name, opts, callback)
 	opts = opts or {}
 	local ttl = opts.ttl_seconds or 3600
-	if not opts.force and fresh(cache[name], ttl) then
+	local error_ttl = opts.error_ttl_seconds or 0
+	if not opts.force and fresh(cache[name], ttl, error_ttl) then
 		callback(cache[name])
 		return
 	end
@@ -88,6 +98,10 @@ function M.get_package(name, opts, callback)
 	local cmd = curl_command(name, opts)
 
 	local function deliver(result)
+		-- Errors carry no time of their own; stamp one so negative caching can age them.
+		if result.error and not result.time then
+			result.time = os.time()
+		end
 		cache[name] = result
 		local callbacks = pending[name]
 		pending[name] = nil

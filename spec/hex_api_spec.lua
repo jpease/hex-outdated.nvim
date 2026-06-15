@@ -189,6 +189,66 @@ describe("api.get_package in-flight coalescing", function()
 	end)
 end)
 
+describe("api.get_package negative caching", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return {}
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	local function complete_error()
+		exits[#exits]({ code = 0, stdout = "{}\n503" })
+	end
+
+	it("serves a recent failure from cache instead of re-spawning", function()
+		api.get_package("jason", { error_ttl_seconds = 60 }, function() end)
+		complete_error()
+
+		local res
+		api.get_package("jason", { error_ttl_seconds = 60 }, function(r)
+			res = r
+		end)
+
+		assert.are.equal(1, system_calls) -- the cached failure is still fresh
+		assert.is_truthy(res.error)
+	end)
+
+	it("re-spawns when negative caching is disabled (error_ttl_seconds = 0)", function()
+		api.get_package("jason", { error_ttl_seconds = 0 }, function() end)
+		complete_error()
+		api.get_package("jason", { error_ttl_seconds = 0 }, function() end)
+
+		assert.are.equal(2, system_calls)
+	end)
+end)
+
 describe("api.get_package spawn failure", function()
 	local old_vim
 	local api
