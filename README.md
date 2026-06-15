@@ -183,7 +183,7 @@ require("hex-outdated").setup({
   },
   popup = { border = "rounded", max_height = 20, hover_key = "K" }, -- hover_key=false disables auto-K
   -- opt-in buffer-local keymaps (unset by default):
-  keymaps = {}, -- e.g. { upgrade = "<leader>cu", versions = "<leader>cv", open = "<leader>co" }
+  keymaps = {}, -- e.g. { upgrade = "<leader>cu", versions = "<leader>cv", info = "<leader>ci" }
 })
 ```
 
