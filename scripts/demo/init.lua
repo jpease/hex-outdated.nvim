@@ -2,6 +2,8 @@
 -- Loads only this plugin from the repo root (run vhs from the repo root).
 vim.opt.runtimepath:append(vim.fn.getcwd())
 vim.o.termguicolors = true
+-- VHS recordings should not be interrupted by user-local stale swap files.
+vim.o.updatecount = 0
 vim.o.number = true
 vim.o.signcolumn = "yes"
 vim.o.laststatus = 0

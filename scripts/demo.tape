@@ -18,7 +18,7 @@ Set Theme "Catppuccin Macchiato"
 
 # Open the sample mix.exs in the isolated demo config.
 Hide
-Type "nvim -u scripts/demo/init.lua scripts/demo/mix.exs"
+Type "nvim -n -u scripts/demo/init.lua scripts/demo/mix.exs"
 Enter
 Sleep 2s
 Show
