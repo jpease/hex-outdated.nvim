@@ -18,8 +18,12 @@ jobs:
           args: --check .
 
   lint-test:
-    name: luacheck + busted
-    runs-on: ubuntu-latest
+    name: luacheck + busted (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: leafo/gh-actions-lua@v13
@@ -36,8 +40,12 @@ jobs:
         run: busted
 
   integration:
-    name: headless neovim
-    runs-on: ubuntu-latest
+    name: headless neovim (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: rhysd/action-setup-vim@v1
@@ -48,10 +56,11 @@ jobs:
       # exercised too. If it fails, the parser spec skips itself rather than the
       # whole job failing — the rest of the integration suite needs no parser.
       - name: Install elixir Treesitter parser
+        if: runner.os == 'Linux'
         continue-on-error: true
         run: |
           git clone --depth 1 https://github.com/nvim-treesitter/nvim-treesitter \
             "$HOME/.local/share/nvim/site/pack/ts/start/nvim-treesitter"
-          nvim --headless "+TSInstallSync! elixir" +qa
+          nvim --headless -u NONE -i NONE "+TSInstallSync! elixir" +qa
       - name: Integration tests
-        run: nvim --headless -u NONE -l test/run.lua
+        run: nvim --headless -u NONE -i NONE -l test/run.lua
