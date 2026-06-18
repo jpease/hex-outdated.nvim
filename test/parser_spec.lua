@@ -2,12 +2,34 @@
 -- elixir parser is not installed (the pure pattern parser is covered in spec/).
 local parser = require("hex-outdated.parser")
 
+describe("parser fallback", function()
+	it("scopes parsing to the configured dependency function and records aliases", function()
+		local deps = parser.parse_lines({
+			"def project do",
+			'  [deps: project_deps(), example: {:not_a_dep, "1.0.0"}]',
+			"end",
+			"defp project_deps do",
+			'  # {:commented, "~> 1.0"}',
+			'  [{:local_app, "~> 2.0", hex: :actual_package}]',
+			"end",
+		})
+
+		eq(1, #deps)
+		eq("local_app", deps[1].name)
+		eq("actual_package", deps[1].package)
+	end)
+end)
+
 local MIX = {
 	"defmodule App.MixProject do",
-	"  defp deps do",
+	"  def project do",
+	'    [deps: project_deps(), example: {:not_a_dep, "1.0.0"}]',
+	"  end",
+	"  defp project_deps do",
 	"    [",
 	'      {:jason, "~> 1.0"},',
 	'      {:phoenix, "~> 1.8", only: :prod},',
+	'      {:local_app, "~> 2.0", hex: :actual_package},',
 	'      {:local_dep, path: "../local_dep"},',
 	'      {:from_git, github: "owner/repo"},',
 	"    ]",
@@ -43,14 +65,20 @@ describe("parser (treesitter)", function()
 		eq("~> 1.8", by_name.phoenix.requirement)
 	end)
 
-	it("skips path and git deps (keyword second element)", function()
+	it("skips unrelated, path, and git tuples", function()
+		is_nil(by_name.not_a_dep, "tuple outside the configured deps function skipped")
 		is_nil(by_name.local_dep, "path dep skipped")
 		is_nil(by_name.from_git, "github dep skipped")
 	end)
 
+	it("records the effective Hex package for aliased dependencies", function()
+		truthy(by_name.local_app, "aliased dependency found")
+		eq("actual_package", by_name.local_app.package)
+	end)
+
 	it("reports the requirement span inside the quotes", function()
 		local d = by_name.jason
-		eq(3, d.row, "0-indexed row of the jason line")
+		eq(6, d.row, "0-indexed row of the jason line")
 		-- col_start sits just inside the opening quote; the slice is the requirement.
 		local line = MIX[d.row + 1]
 		eq("~> 1.0", line:sub(d.col_start + 1, d.col_end))

@@ -6,26 +6,85 @@ local M = {}
 -- immediately after the comma and are intentionally skipped here.
 local DEP_PATTERN = '{%s*:([%w_]+)%s*,%s*"'
 
+local function strip_comment(line)
+	local in_string = false
+	local escaped = false
+	for i = 1, #line do
+		local char = line:sub(i, i)
+		if escaped then
+			escaped = false
+		elseif char == "\\" and in_string then
+			escaped = true
+		elseif char == '"' then
+			in_string = not in_string
+		elseif char == "#" and not in_string then
+			return line:sub(1, i - 1)
+		end
+	end
+	return line
+end
+
+local function configured_dep_function(lines)
+	for _, line in ipairs(lines) do
+		local name = strip_comment(line):match("deps%s*:%s*([%a_][%w_!?]*)%s*%(")
+		if name then
+			return name
+		end
+	end
+	return "deps"
+end
+
+local function function_start(line, name)
+	local indent, declared = line:match("^(%s*)defp%s+([%w_!?]+)")
+	if not declared then
+		indent, declared = line:match("^(%s*)def%s+([%w_!?]+)")
+	end
+	if declared == name then
+		return indent, line:find(",%s*do%s*:") ~= nil
+	end
+end
+
+local function package_alias(text)
+	return text:match("hex%s*:%s*:([%w_]+)")
+end
+
 --- Parse dependency tuples out of a list of lines (pure; no Neovim APIs).
 --- Returns a list of dep tables with 0-indexed `row`, `col_start`, `col_end`.
 function M.parse_lines(lines)
 	local deps = {}
+	local dep_function = configured_dep_function(lines)
+	local active = false
+	local function_indent
+	local one_line = false
 	for i, line in ipairs(lines) do
-		-- `quote_pos` is the 1-indexed position of the opening quote that DEP_PATTERN
-		-- ends on, so we read the requirement from exactly that tuple (not the first
-		-- quote on the line, which could belong to a comment or earlier text).
-		local _, quote_pos, name = line:find(DEP_PATTERN)
-		if name then
-			local content = line:match('([^"]*)"', quote_pos + 1)
-			if content then
-				deps[#deps + 1] = {
-					name = name,
-					requirement = content,
-					kind = "hex",
-					row = i - 1,
-					col_start = quote_pos, -- 0-indexed position just inside the opening quote
-					col_end = quote_pos + #content, -- 0-indexed, exclusive end (the closing quote)
-				}
+		local code = strip_comment(line)
+		if not active then
+			function_indent, one_line = function_start(code, dep_function)
+			active = function_indent ~= nil
+		elseif code:match("^" .. function_indent .. "end%s*$") then
+			active = false
+		end
+		if active then
+			-- `quote_pos` is the 1-indexed position of the opening quote that DEP_PATTERN
+			-- ends on, so we read the requirement from exactly that tuple (not the first
+			-- quote on the line, which could belong to a comment or earlier text).
+			local _, quote_pos, name = code:find(DEP_PATTERN)
+			if name then
+				local content = code:match('([^"]*)"', quote_pos + 1)
+				if content then
+					deps[#deps + 1] = {
+						name = name,
+						package = package_alias(code),
+						requirement = content,
+						kind = "hex",
+						row = i - 1,
+						col_start = quote_pos, -- 0-indexed position just inside the opening quote
+						col_end = quote_pos + #content, -- 0-indexed, exclusive end (the closing quote)
+					}
+				end
+			end
+			if one_line then
+				active = false
 			end
 		end
 	end
@@ -58,6 +117,59 @@ local function warn_once(msg)
 	end
 end
 
+local function node_text(node, bufnr)
+	return vim.treesitter.get_node_text(node, bufnr)
+end
+
+local function child_of_type(node, node_type)
+	for i = 0, node:named_child_count() - 1 do
+		local child = node:named_child(i)
+		if child:type() == node_type then
+			return child
+		end
+	end
+end
+
+local function definition_name(node, bufnr)
+	if node:type() ~= "call" then
+		return nil
+	end
+	local target = node:field("target")[1]
+	local target_text = target and node_text(target, bufnr)
+	if target_text ~= "def" and target_text ~= "defp" then
+		return nil
+	end
+	local arguments = child_of_type(node, "arguments")
+	local head = arguments and arguments:named_child(0)
+	if not head then
+		return nil
+	elseif head:type() == "identifier" then
+		return node_text(head, bufnr)
+	elseif head:type() == "call" then
+		local function_target = head:field("target")[1]
+		return function_target and node_text(function_target, bufnr)
+	end
+end
+
+local function definition_body(node)
+	return child_of_type(node, "do_block") or node
+end
+
+local function find_definition(node, bufnr, name)
+	if type(node.type) ~= "function" then
+		return node -- test doubles that only exercise query compilation
+	end
+	if definition_name(node, bufnr) == name then
+		return definition_body(node)
+	end
+	for i = 0, node:named_child_count() - 1 do
+		local found = find_definition(node:named_child(i), bufnr, name)
+		if found then
+			return found
+		end
+	end
+end
+
 local function parse_treesitter(bufnr)
 	local ok, lang_tree = pcall(vim.treesitter.get_parser, bufnr, "elixir")
 	if not ok or not lang_tree then
@@ -71,18 +183,28 @@ local function parse_treesitter(bufnr)
 	if not query then
 		return nil
 	end
+	local lines = vim.api
+			and vim.api.nvim_buf_get_lines
+			and vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		or {}
+	local body = find_definition(tree:root(), bufnr, configured_dep_function(lines))
+	if not body then
+		return {}
+	end
 	local deps = {}
 	local current
 	-- iter_captures(node, source, start_row, end_row): yields capture id + node in
 	-- document order, so each @name precedes its sibling @req within a tuple.
-	for id, node in query:iter_captures(tree:root(), bufnr, 0, -1) do
+	for id, node in query:iter_captures(body, bufnr, 0, -1) do
 		local capture = query.captures[id]
-		local text = vim.treesitter.get_node_text(node, bufnr)
+		local text = node_text(node, bufnr)
 		if capture == "name" then
 			current = { name = (text:gsub("^:", "")), kind = "hex" }
 		elseif capture == "req" and current then
 			local srow, scol, _, ecol = node:range()
+			local tuple = node:parent()
 			current.requirement = text:gsub('^"', ""):gsub('"$', "")
+			current.package = tuple and package_alias(node_text(tuple, bufnr))
 			current.row = srow
 			current.col_start = scol + 1 -- inside opening quote
 			current.col_end = ecol - 1 -- before closing quote

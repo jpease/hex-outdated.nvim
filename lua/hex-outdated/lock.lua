@@ -38,9 +38,24 @@ function M.out_of_range(requirement_str, locked_str)
 	return not version.satisfies(req, locked)
 end
 
--- Strip the last "/component" from a POSIX-style path.
+local function separator(path)
+	return path:find("\\", 1, true) and "\\" or "/"
+end
+
+local function normalized(path)
+	return path:gsub("\\", "/")
+end
+
+local function native(path, sep)
+	if sep == "\\" then
+		return path:gsub("/", "\\")
+	end
+	return path
+end
+
+-- Strip the last path component after normalizing separators.
 local function dirname(path)
-	return (path:gsub("/[^/]*$", ""))
+	return (normalized(path):gsub("/[^/]*$", ""))
 end
 
 --- Locate the mix.lock governing `mix_exs_path`: sibling first, then the nearest
@@ -53,9 +68,10 @@ function M.find_lock_path(mix_exs_path, exists)
 	if type(mix_exs_path) ~= "string" or mix_exs_path == "" then
 		return nil
 	end
+	local sep = separator(mix_exs_path)
 	local dir = dirname(mix_exs_path)
 	while true do
-		local candidate = dir .. "/mix.lock"
+		local candidate = native(dir .. "/mix.lock", sep)
 		if exists(candidate) then
 			return candidate
 		end
@@ -67,13 +83,26 @@ function M.find_lock_path(mix_exs_path, exists)
 	end
 end
 
--- path -> { mtime = seconds, map = table }. A debounced analyze calls load() on
--- every cycle; memoizing by mtime avoids re-reading an unchanged file.
+-- path -> { identity = metadata signature, map = table }. A debounced analyze
+-- calls load() on every cycle; memoizing by high-resolution metadata avoids
+-- re-reading an unchanged file without missing same-second rewrites.
 local cache = {}
 
 --- Reset the load cache (used by tests).
 function M.clear_cache()
 	cache = {}
+end
+
+local function stat_identity(stat)
+	local mtime = stat.mtime or {}
+	local ctime = stat.ctime or {}
+	return table.concat({
+		tostring(mtime.sec or 0),
+		tostring(mtime.nsec or 0),
+		tostring(ctime.sec or 0),
+		tostring(ctime.nsec or 0),
+		tostring(stat.size or 0),
+	}, ":")
 end
 
 --- Read + parse the lock file at `path`, memoized by mtime. Returns the
@@ -86,9 +115,9 @@ function M.load(path)
 	if not stat then
 		return {}
 	end
-	local mtime = stat.mtime.sec
+	local identity = stat_identity(stat)
 	local entry = cache[path]
-	if entry and entry.mtime == mtime then
+	if entry and entry.identity == identity then
 		return entry.map
 	end
 	local fd = io.open(path, "r")
@@ -98,7 +127,7 @@ function M.load(path)
 	local text = fd:read("*a")
 	fd:close()
 	local map = M.parse(text)
-	cache[path] = { mtime = mtime, map = map }
+	cache[path] = { identity = identity, map = map }
 	return map
 end
 

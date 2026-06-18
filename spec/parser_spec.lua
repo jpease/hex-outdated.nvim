@@ -39,13 +39,42 @@ describe("parser.parse_lines (fallback)", function()
 		end
 	end)
 
-	it("reads the tuple's quote even if an earlier quote precedes it", function()
-		local deps = parser.parse_lines({ '  # "note" {:phoenix, "~> 1.6"},' })
+	it("ignores commented and unrelated tuples", function()
+		local deps = parser.parse_lines({
+			'def project, do: [example: {:not_a_dep, "1.0.0"}]',
+			"defp deps do",
+			'  # {:commented, "~> 1.0"}',
+			'  [{:real_dep, "~> 2.0"}]',
+			"end",
+		})
+
 		assert.are.equal(1, #deps)
-		assert.are.equal("phoenix", deps[1].name)
-		assert.are.equal("~> 1.6", deps[1].requirement)
-		local line = '  # "note" {:phoenix, "~> 1.6"},'
-		assert.are.equal("~> 1.6", line:sub(deps[1].col_start + 1, deps[1].col_end))
+		assert.are.equal("real_dep", deps[1].name)
+	end)
+
+	it("uses the dependency function referenced by project and records Hex aliases", function()
+		local deps = parser.parse_lines({
+			"def project do",
+			"  [deps: project_deps()]",
+			"end",
+			"defp project_deps do",
+			'  [{:local_app, "~> 2.0", hex: :actual_package}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("local_app", deps[1].name)
+		assert.are.equal("actual_package", deps[1].package)
+	end)
+
+	it("does not leak out of a one-line dependency function", function()
+		local deps = parser.parse_lines({
+			'defp deps, do: [{:real_dep, "~> 2.0"}]',
+			'example = {:not_a_dep, "1.0.0"}',
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real_dep", deps[1].name)
 	end)
 end)
 

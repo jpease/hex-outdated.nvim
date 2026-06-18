@@ -47,6 +47,33 @@ describe("version.classify", function()
 		local r = version.classify("~> 1.0", { "1.0.0-rc.1" })
 		assert.are.equal("invalid", r.status)
 	end)
+
+	it(
+		"matches an explicit prerelease requirement even when older stable releases exist",
+		function()
+			local r = version.classify("== 2.0.0-rc.2", { "1.9.0", "2.0.0-rc.2" })
+			assert.are.equal("up_to_date", r.status)
+			assert.are.equal("2.0.0-rc.2", r.latest)
+		end
+	)
+
+	it("excludes prereleases for stable operands using Hex matching semantics", function()
+		local r = version.classify(">= 1.0.0", { "1.1.0-rc.1" })
+		assert.are.equal("invalid", r.status)
+	end)
+
+	it("preserves prerelease identifiers in suggested exact requirements", function()
+		local r = version.classify("== 2.0.0-rc.1", { "2.0.0-rc.1", "2.0.0-rc.2" })
+		assert.are.equal("outdated", r.status)
+		assert.are.equal("== 2.0.0-rc.2", r.suggested)
+	end)
+
+	it("allows prerelease candidates when the pessimistic operand is a prerelease", function()
+		local r = version.classify("~> 2.1.2-dev", { "2.1.2-dev", "2.1.6-dev" })
+		assert.are.equal("upgradable", r.status)
+		assert.are.equal("2.1.6-dev", r.latest)
+		assert.are.equal("~> 2.1.6-dev", r.suggested)
+	end)
 end)
 
 describe("version.classify memoization", function()

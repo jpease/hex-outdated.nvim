@@ -204,12 +204,16 @@ Run |:checkhealth| hex-outdated to verify Neovim version, `curl`, and the
 ==============================================================================
 11. HOW IT WORKS                                      *hex-outdated-how-it-works*
 
-`mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find top-level
-dependency tuples and their requirement strings. For each Hex dependency the
-plugin asynchronously queries `https://hex.pm/api/packages/:name` (cached),
-then compares your requirement against the published versions to classify it.
-The requirement status comes from `mix.exs` alone; `mix.lock` is read locally
-only for the optional lock context (see |hex-outdated-lock|). There is no
-shelling out to `mix`.
+`mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find dependency
+tuples inside the function referenced by the project's `deps:` setting
+(`deps/0` by default). Hex package aliases such as
+`{:local_app, "~> 2.0", hex: :actual_package}` are used for API lookups while
+the local application name remains associated with `mix.lock`. For each Hex
+dependency the plugin asynchronously queries
+`https://hex.pm/api/packages/:name` (cached), then compares your requirement
+against the published versions using Hex prerelease semantics. The requirement
+status comes from `mix.exs` alone; `mix.lock` is read locally only for the
+optional lock context (see |hex-outdated-lock|). There is no shelling out to
+`mix`.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

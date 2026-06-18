@@ -1,6 +1,7 @@
 local lock = require("hex-outdated.lock")
 local core = require("hex-outdated.core")
 local config = require("hex-outdated.config")
+local hex_api = require("hex-outdated.hex_api")
 
 local function write(path, text)
 	local fd = assert(io.open(path, "w"))
@@ -27,6 +28,58 @@ describe("lock.load", function()
 
 	it("returns an empty table for a missing file", function()
 		eq({}, lock.load(vim.fn.tempname() .. "/nope/mix.lock"))
+	end)
+
+	it("re-reads a same-second rewrite with the same file size", function()
+		lock.clear_cache()
+		local path = vim.fn.tempname()
+		write(path, '%{\n  "jason": {:hex, :jason, "1.2.0", "x", [:mix], [], "hexpm", "y"},\n}\n')
+		eq("1.2.0", lock.load(path).jason, "first load")
+		local mtime = vim.uv.fs_stat(path).mtime
+
+		write(path, '%{\n  "jason": {:hex, :jason, "1.4.5", "x", [:mix], [], "hexpm", "y"},\n}\n')
+		vim.uv.fs_utime(path, mtime.sec, mtime.sec)
+
+		eq("1.4.5", lock.load(path).jason, "same-second rewrite detected")
+	end)
+end)
+
+describe("lock.find_lock_path", function()
+	it("walks native Windows paths", function()
+		local expected = "C:\\proj\\mix.lock"
+		local found = lock.find_lock_path("C:\\proj\\apps\\web\\mix.exs", function(path)
+			return path == expected
+		end)
+		eq(expected, found)
+	end)
+end)
+
+describe("core.analyze Hex aliases", function()
+	it("queries the effective Hex package while keeping the application name", function()
+		config.setup({ lock = { enabled = false } })
+		local buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.bo[buf].filetype = "elixir"
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+			"defp deps do",
+			'  [{:local_app, "~> 2.0", hex: :actual_package}]',
+			"end",
+		})
+		local requested
+		local original = hex_api.get_package
+		hex_api.get_package = function(name, _, callback)
+			requested = name
+			callback({ versions = { "2.0.0" } })
+		end
+		core.state[buf] = { enabled = true }
+
+		core.analyze(buf)
+
+		hex_api.get_package = original
+		eq("actual_package", requested)
+		eq("local_app", core.state[buf].deps[1].name)
+		eq(vim.api.nvim_buf_get_changedtick(buf), core.state[buf].deps[1].changedtick)
+		config.setup({})
 	end)
 end)
 

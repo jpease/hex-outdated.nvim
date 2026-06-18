@@ -75,6 +75,14 @@ describe("lock.find_lock_path", function()
 		assert.are.equal("/proj/mix.lock", lock.find_lock_path("/proj/apps/web/mix.exs", exists))
 	end)
 
+	it("walks Windows paths using native separators", function()
+		local exists = present({ ["C:\\proj\\mix.lock"] = true })
+		assert.are.equal(
+			"C:\\proj\\mix.lock",
+			lock.find_lock_path("C:\\proj\\apps\\web\\mix.exs", exists)
+		)
+	end)
+
 	it("returns nil when no lock exists in any ancestor", function()
 		assert.is_nil(lock.find_lock_path("/proj/apps/web/mix.exs", present({})))
 	end)

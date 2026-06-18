@@ -103,6 +103,7 @@ function M.analyze(bufnr, opts)
 		or { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
 	M.state[bufnr] = st
 	st.deps = parser.parse_buffer(bufnr)
+	local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
 	local lockmap = {}
 	if config.options.lock.enabled then
 		local path = lock.find_lock_path(vim.api.nvim_buf_get_name(bufnr))
@@ -112,6 +113,7 @@ function M.analyze(bufnr, opts)
 	end
 	for _, dep in ipairs(st.deps) do
 		if dep.kind == "hex" then
+			dep.changedtick = changedtick
 			dep.locked = lockmap[dep.name]
 			dep.lock_out_of_range = (
 				config.options.lock.stale_diagnostic
@@ -131,23 +133,27 @@ function M.analyze(bufnr, opts)
 
 	for _, dep in ipairs(st.deps) do
 		if dep.kind == "hex" and dep.requirement then
-			hex_api.get_package(dep.name, M.api_opts({ force = opts.force }), function(res)
-				if not vim.api.nvim_buf_is_valid(bufnr) then
-					return
+			hex_api.get_package(
+				dep.package or dep.name,
+				M.api_opts({ force = opts.force }),
+				function(res)
+					if not vim.api.nvim_buf_is_valid(bufnr) then
+						return
+					end
+					local cur = M.state[bufnr]
+					if not cur or not cur.enabled then
+						return
+					end
+					local patch = package_result_patch(dep, res)
+					-- Copy all classified fields: on a hard error they are nil, and on a
+					-- stale result they reflect the retained last-known-good versions.
+					dep.status = patch.status -- terminal, incl. "unknown" (rendered as nothing)
+					dep.latest = patch.latest
+					dep.suggested = patch.suggested
+					dep.op = patch.op
+					M.refresh_render(bufnr)
 				end
-				local cur = M.state[bufnr]
-				if not cur or not cur.enabled then
-					return
-				end
-				local patch = package_result_patch(dep, res)
-				-- Copy all classified fields: on a hard error they are nil, and on a
-				-- stale result they reflect the retained last-known-good versions.
-				dep.status = patch.status -- terminal, incl. "unknown" (rendered as nothing)
-				dep.latest = patch.latest
-				dep.suggested = patch.suggested
-				dep.op = patch.op
-				M.refresh_render(bufnr)
-			end)
+			)
 		end
 	end
 end

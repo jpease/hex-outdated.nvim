@@ -21,6 +21,8 @@ describe("actions.upgrade", function()
 			row = 0,
 			col_start = s, -- 0-indexed position just inside the opening quote
 			col_end = s + #"~> 1.0",
+			requirement = "~> 1.0",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
 			suggested = "~> 1.4",
 		}
 		actions.upgrade(buf, dep)
@@ -33,16 +35,45 @@ describe("actions.upgrade", function()
 		actions.upgrade(buf, { row = 0, col_start = 16, col_end = 22 })
 		eq(line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "line unchanged")
 	end)
+
+	it("does not edit when the buffer changed after parsing", function()
+		local line = '      {:jason, "~> 1.0"},'
+		local buf = mix_buf(line)
+		local s = line:find('"')
+		local dep = {
+			row = 0,
+			col_start = s,
+			col_end = s + #"~> 1.0",
+			requirement = "~> 1.0",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			suggested = "~> 1.4",
+		}
+		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "XX" .. line })
+
+		actions.upgrade(buf, dep)
+
+		eq("XX" .. line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1])
+	end)
 end)
 
 describe("actions.versions float", function()
 	it("opens a wiped, filetyped float listing the versions", function()
 		local buf = mix_buf('      {:jason, "~> 1.0"},')
-		local dep = { name = "jason", row = 0, col_start = 16, col_end = 22, op = "~>" }
-		local fetch = function(_, cb)
+		local dep = {
+			name = "local_app",
+			package = "jason",
+			row = 0,
+			col_start = 16,
+			col_end = 22,
+			op = "~>",
+		}
+		local requested
+		local fetch = function(name, cb)
+			requested = name
 			cb({ versions = { "1.4.5", "1.4.4", "1.0.0" } })
 		end
 		actions.versions(buf, dep, fetch)
+		eq("jason", requested, "Hex alias used for version lookup")
 
 		-- The window is created inside vim.schedule; wait for it to appear.
 		local function float_win()
@@ -67,20 +98,38 @@ describe("actions.versions float", function()
 	end)
 end)
 
+describe("actions.open", function()
+	it("opens the effective Hex package for an aliased dependency", function()
+		local original = vim.ui.open
+		local opened
+		vim.ui.open = function(url)
+			opened = url
+		end
+
+		actions.open({ name = "local_app", package = "actual_package" })
+
+		vim.ui.open = original
+		eq("https://hex.pm/packages/actual_package", opened)
+	end)
+end)
+
 describe("actions.info float", function()
 	it("opens a non-focusing float with the detail rows", function()
 		local buf = mix_buf('      {:jason, "~> 1.0"},')
 		vim.api.nvim_set_current_buf(buf)
 		local dep = {
-			name = "jason",
+			name = "local_app",
+			package = "jason",
 			requirement = "~> 1.0",
 			status = "upgradable",
-			latest = "1.4.5",
 			locked = "1.2.0",
 		}
-		actions.info(dep, function(_, cb)
+		local requested
+		actions.info(dep, function(name, cb)
+			requested = name
 			cb({ latest = "1.4.5", versions = { "1.4.5" } })
 		end)
+		eq("jason", requested, "Hex alias used for detail lookup")
 
 		local function float_win()
 			for _, w in ipairs(vim.api.nvim_list_wins()) do
@@ -97,7 +146,7 @@ describe("actions.info float", function()
 		truthy(win, "float opened")
 		local fbuf = vim.api.nvim_win_get_buf(win)
 		local lines = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
-		eq("jason", lines[1])
+		eq("local_app", lines[1])
 		eq("hex-outdated-info", vim.bo[fbuf].filetype)
 		vim.api.nvim_win_close(win, true)
 	end)

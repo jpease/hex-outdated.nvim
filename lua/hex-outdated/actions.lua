@@ -4,6 +4,34 @@ local version = require("hex-outdated.version")
 
 local M = {}
 
+local function package_name(dep)
+	return dep.package or dep.name
+end
+
+local function replace_requirement(bufnr, dep, replacement)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		return false
+	end
+	if dep.changedtick and vim.api.nvim_buf_get_changedtick(bufnr) ~= dep.changedtick then
+		vim.notify(
+			"hex-outdated: dependency changed since it was analyzed; refresh and try again",
+			vim.log.levels.WARN
+		)
+		return false
+	end
+	local ok, current =
+		pcall(vim.api.nvim_buf_get_text, bufnr, dep.row, dep.col_start, dep.row, dep.col_end, {})
+	if not ok or (dep.requirement and current[1] ~= dep.requirement) then
+		vim.notify(
+			"hex-outdated: dependency position is stale; refresh and try again",
+			vim.log.levels.WARN
+		)
+		return false
+	end
+	vim.api.nvim_buf_set_text(bufnr, dep.row, dep.col_start, dep.row, dep.col_end, { replacement })
+	return true
+end
+
 -- The operator to preserve when inserting a version: prefer the classified
 -- `dep.op`, but fall back to parsing the raw requirement so the popup works
 -- even on deps that were never classified (e.g. a fetch failed).
@@ -69,14 +97,7 @@ function M.upgrade(bufnr, dep)
 		vim.notify("hex-outdated: nothing to upgrade on this line", vim.log.levels.INFO)
 		return
 	end
-	vim.api.nvim_buf_set_text(
-		bufnr,
-		dep.row,
-		dep.col_start,
-		dep.row,
-		dep.col_end,
-		{ dep.suggested }
-	)
+	replace_requirement(bufnr, dep, dep.suggested)
 end
 
 --- Open the package's hex.pm page in a browser.
@@ -85,7 +106,7 @@ function M.open(dep)
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
 	end
-	vim.ui.open("https://hex.pm/packages/" .. dep.name)
+	vim.ui.open("https://hex.pm/packages/" .. package_name(dep))
 end
 
 -- Build a requirement string for an inserted version, preserving the operator style.
@@ -107,7 +128,7 @@ function M.versions(bufnr, dep, fetch)
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
 	end
-	fetch(dep.name, function(res)
+	fetch(package_name(dep), function(res)
 		if res.error or not res.versions or #res.versions == 0 then
 			vim.notify("hex-outdated: " .. (res.error or "no versions found"), vim.log.levels.WARN)
 			return
@@ -151,14 +172,7 @@ function M.versions(bufnr, dep, fetch)
 				local selected = vim.api.nvim_get_current_line()
 				close()
 				if vim.api.nvim_buf_is_valid(bufnr) then
-					vim.api.nvim_buf_set_text(
-						bufnr,
-						dep.row,
-						dep.col_start,
-						dep.row,
-						dep.col_end,
-						{ requirement_for(dep_op(dep), selected) }
-					)
+					replace_requirement(bufnr, dep, requirement_for(dep_op(dep), selected))
 				end
 			end, { buffer = buf, nowait = true })
 		end)
@@ -214,7 +228,7 @@ function M.info(dep, fetch)
 	if dep.latest or dep.status == "invalid" then
 		open()
 	else
-		fetch(dep.name, function(res)
+		fetch(package_name(dep), function(res)
 			if res and res.latest then
 				dep.latest = res.latest
 			end

@@ -194,12 +194,16 @@ if you define them first: `HexOutdatedUpToDate`, `HexOutdatedUpgradable`,
 
 ## How it works
 
-`mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find top-level
-dependency tuples and their requirement strings. For each Hex dependency the
-plugin asynchronously queries `https://hex.pm/api/packages/:name` (cached), then
-compares your requirement against the published versions to classify it. The
-requirement status comes from `mix.exs` alone; `mix.lock` is read locally only
-for the optional lock context above. There is no shelling out to `mix`.
+`mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find dependency
+tuples inside the function referenced by the project's `deps:` setting
+(`deps/0` by default). Hex package aliases such as
+`{:local_app, "~> 2.0", hex: :actual_package}` are honored for API lookups while
+the local application name remains associated with `mix.lock`. For each Hex
+dependency the plugin asynchronously queries
+`https://hex.pm/api/packages/:name` (cached), then compares your requirement
+against the published versions using Hex prerelease semantics. The requirement
+status comes from `mix.exs` alone; `mix.lock` is read locally only for the
+optional lock context above. There is no shelling out to `mix`.
 
 ## Development
 
@@ -217,6 +221,11 @@ extmark/diagnostic rendering, the curl queue, and buffer actions — are exercis
 against a real headless Neovim under `test/`, run with
 `nvim --headless -u NONE -l test/run.lua` (no busted/luarocks needed). Both
 suites run in CI.
+
+CI runs the Lua checks on Ubuntu and macOS, and the dependency-free
+headless-Neovim integration suite on Ubuntu, macOS, and Windows. The Elixir
+Treesitter parser is installed best-effort on Linux; parser-independent and
+platform-sensitive regressions run on every integration platform.
 
 ## License
 

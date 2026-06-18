@@ -143,6 +143,11 @@ end
 
 --- Does parsed version `v` satisfy parsed requirement `req`?
 function M.satisfies(req, v)
+	-- Hex matches requirements with allow_pre: false. A prerelease candidate is
+	-- therefore eligible only when the requirement operand is itself a prerelease.
+	if v.pre and not req.version.pre then
+		return false
+	end
 	local c = M.compare(v, req.version)
 	local op = req.op
 	if op == "==" then
@@ -169,12 +174,13 @@ end
 --- Suggest a replacement requirement string bumping to `latest`, or nil.
 function M.suggested_requirement(req, latest)
 	if req.op == "~>" then
+		local suffix = latest.pre and ("-" .. latest.pre) or ""
 		if req.version.precision <= 2 then
-			return string.format("~> %d.%d", latest.major, latest.minor)
+			return string.format("~> %d.%d%s", latest.major, latest.minor, suffix)
 		end
-		return string.format("~> %d.%d.%d", latest.major, latest.minor, latest.patch)
+		return string.format("~> %d.%d.%d%s", latest.major, latest.minor, latest.patch, suffix)
 	elseif req.op == "==" then
-		return string.format("== %d.%d.%d", latest.major, latest.minor, latest.patch)
+		return "== " .. M.tostring(latest)
 	end
 	return nil
 end
@@ -214,7 +220,7 @@ local function compute_classify(req_str, published)
 			end
 		end
 	end
-	local pool = (#stables > 0) and stables or parsed
+	local pool = req.version.pre and parsed or ((#stables > 0) and stables or parsed)
 	if #pool == 0 then
 		return { status = "invalid", op = req.op }
 	end
