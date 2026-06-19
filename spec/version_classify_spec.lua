@@ -74,6 +74,23 @@ describe("version.classify", function()
 		assert.are.equal("2.1.6-dev", r.latest)
 		assert.are.equal("~> 2.1.6-dev", r.suggested)
 	end)
+
+	it("reports upgradable when a strict-less-than constraint excludes the latest release", function()
+		local r = version.classify("< 2.0.0", { "1.9.0", "2.0.0" })
+		assert.are.equal("upgradable", r.status)
+		assert.are.equal("2.0.0", r.latest)
+	end)
+
+	it("reports upgradable when not-equal excludes the latest release", function()
+		local r = version.classify("!= 3.0.0", { "1.0.0", "2.0.0", "3.0.0" })
+		assert.are.equal("upgradable", r.status)
+		assert.are.equal("3.0.0", r.latest)
+	end)
+
+	it("reports invalid for a requirement with extra numeric components", function()
+		local r = version.classify("== 1.2.3.4", { "1.2.3" })
+		assert.are.equal("unknown", r.status)
+	end)
 end)
 
 describe("version.classify memoization", function()

@@ -65,22 +65,32 @@ function M.parse_lines(lines)
 			active = false
 		end
 		if active then
-			-- `quote_pos` is the 1-indexed position of the opening quote that DEP_PATTERN
-			-- ends on, so we read the requirement from exactly that tuple (not the first
-			-- quote on the line, which could belong to a comment or earlier text).
-			local _, quote_pos, name = code:find(DEP_PATTERN)
-			if name then
+			-- Scan the entire line for dep tuples: a single line may hold multiple
+			-- entries (e.g. compact `do:` form). For each match we extract the
+			-- requirement from that specific tuple and scope the alias search to the
+			-- text between this tuple's `{` and the next one.
+			local search_pos = 1
+			while true do
+				local match_start, quote_pos, name = code:find(DEP_PATTERN, search_pos)
+				if not name then
+					break
+				end
 				local content = code:match('([^"]*)"', quote_pos + 1)
 				if content then
+					local next_brace = code:find("{", quote_pos + #content + 2)
+					local tuple_text = code:sub(match_start, next_brace and (next_brace - 1) or #code)
 					deps[#deps + 1] = {
 						name = name,
-						package = package_alias(code),
+						package = package_alias(tuple_text),
 						requirement = content,
 						kind = "hex",
 						row = i - 1,
 						col_start = quote_pos, -- 0-indexed position just inside the opening quote
 						col_end = quote_pos + #content, -- 0-indexed, exclusive end (the closing quote)
 					}
+					search_pos = quote_pos + #content + 2
+				else
+					search_pos = quote_pos + 1
 				end
 			end
 			if one_line then

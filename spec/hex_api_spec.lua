@@ -198,6 +198,22 @@ describe("api.get_package in-flight coalescing", function()
 		assert.are.equal(2, system_calls)
 	end)
 
+	it("makes separate requests for the same package on different endpoints", function()
+		local results = {}
+		api.get_package("demo", { base_url = "https://one.test/api", ttl_seconds = 3600 }, function(r)
+			results[#results + 1] = r
+		end)
+		complete_last()
+
+		api.get_package("demo", { base_url = "https://two.test/api", ttl_seconds = 3600 }, function(r)
+			results[#results + 1] = r
+		end)
+		complete_last()
+
+		assert.are.equal(2, system_calls)
+		assert.are.equal(2, #results)
+	end)
+
 	it("serves last-known-good versions when a refetch fails", function()
 		api.get_package("jason", { ttl_seconds = 3600 }, function() end)
 		complete_last() -- success: caches versions { "1.4.4" }

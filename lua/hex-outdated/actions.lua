@@ -110,8 +110,13 @@ function M.open(dep)
 end
 
 -- Build a requirement string for an inserted version, preserving the operator style.
+-- Prerelease versions always keep the full version string under ~> so the operand
+-- actually selects the chosen release (a stable ~> x.y operand would not match it).
 local function requirement_for(op, version_str)
 	if op == "~>" then
+		if version_str:find("-", 1, true) then
+			return string.format("~> %s", version_str)
+		end
 		local major, minor = version_str:match("^(%d+)%.(%d+)")
 		if major and minor then
 			return string.format("~> %s.%s", major, minor)

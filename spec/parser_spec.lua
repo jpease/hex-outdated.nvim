@@ -76,6 +76,28 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal(1, #deps)
 		assert.are.equal("real_dep", deps[1].name)
 	end)
+
+	it("parses every dependency in a compact one-line declaration", function()
+		local deps = parser.parse_lines({
+			'defp deps, do: [{:jason, "~> 1.4"}, {:plug, "~> 1.15"}]',
+		})
+
+		assert.are.equal(2, #deps)
+		assert.are.equal("jason", deps[1].name)
+		assert.are.equal("~> 1.4", deps[1].requirement)
+		assert.are.equal("plug", deps[2].name)
+		assert.are.equal("~> 1.15", deps[2].requirement)
+	end)
+
+	it("scopes hex alias extraction to each tuple in a multi-dep line", function()
+		local deps = parser.parse_lines({
+			'defp deps, do: [{:dep_a, "~> 1.0"}, {:dep_b, "~> 2.0", hex: :actual_b}]',
+		})
+
+		assert.are.equal(2, #deps)
+		assert.is_nil(deps[1].package)
+		assert.are.equal("actual_b", deps[2].package)
+	end)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()

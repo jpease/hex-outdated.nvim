@@ -22,7 +22,7 @@ function M.parse(str)
 	for n in s:gmatch("(%d+)") do
 		parts[#parts + 1] = tonumber(n)
 	end
-	if #parts == 0 then
+	if #parts == 0 or #parts > 3 then
 		return nil
 	end
 	return {
@@ -255,7 +255,9 @@ local function compute_classify(req_str, published)
 		result.status = (req.op == "==") and "outdated" or "upgradable"
 		result.suggested = M.suggested_requirement(req, latest)
 	else
-		result.status = "up_to_date"
+		-- sat exists but sat != latest, and latest is not above req.version: the
+		-- requirement excludes the latest (e.g. "< 2.0.0" when latest = 2.0.0).
+		result.status = "upgradable"
 	end
 	return result
 end

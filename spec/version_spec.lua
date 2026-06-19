@@ -31,6 +31,11 @@ describe("version.parse", function()
 		assert.is_nil(version.parse("1.."))
 		assert.is_nil(version.parse("1.2."))
 	end)
+
+	it("rejects versions with more than three numeric core components", function()
+		assert.is_nil(version.parse("1.2.3.4"))
+		assert.is_nil(version.parse("1.0.0.0"))
+	end)
 end)
 
 describe("version.is_stable / tostring", function()

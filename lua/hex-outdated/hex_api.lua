@@ -1,12 +1,16 @@
 local M = {}
 
--- name -> { versions = {...}, latest = "x.y.z", time = epoch } | { error = msg, not_found = bool }
+-- "endpoint|name" -> { versions = {...}, latest = "x.y.z", time = epoch } | { error = msg, not_found = bool }
 local cache = {}
 
--- name -> list of callbacks waiting on an in-flight request for that package.
+-- "endpoint|name" -> list of callbacks waiting on an in-flight request.
 -- A debounced analyze re-fires while earlier fetches are still running; without
 -- this, each cycle would spawn a duplicate curl for every not-yet-cached dep.
 local pending = {}
+
+local function cache_key(name, base_url)
+	return (base_url or "https://hex.pm/api") .. "|" .. name
+end
 
 -- Concurrency state. `max_concurrent` bounds simultaneously running curl
 -- processes: a mix.exs with many deps would otherwise spawn one process per dep
@@ -103,6 +107,7 @@ local pump -- forward declaration
 local function spawn(name, opts)
 	in_flight = in_flight + 1
 	local cmd = curl_command(name, opts)
+	local key = cache_key(name, opts.base_url)
 
 	local function deliver(result)
 		if result.error then
@@ -111,16 +116,16 @@ local function spawn(name, opts)
 			-- Serve stale-but-good data through a transient failure rather than
 			-- flipping the dep to an error indicator. The cached failure still ages
 			-- out via negative caching, so we retry once the window passes.
-			local prev = cache[name]
+			local prev = cache[key]
 			if prev and prev.versions and #prev.versions > 0 then
 				result.versions = prev.versions
 				result.latest = prev.latest
 				result.stale = true
 			end
 		end
-		cache[name] = result
-		local callbacks = pending[name]
-		pending[name] = nil
+		cache[key] = result
+		local callbacks = pending[key]
+		pending[key] = nil
 		in_flight = in_flight - 1
 		pump()
 		vim.schedule(function()
@@ -155,24 +160,24 @@ end
 --- or { error = msg, not_found? }.
 function M.get_package(name, opts, callback)
 	opts = opts or {}
+	local key = cache_key(name, opts.base_url)
 	local ttl = opts.ttl_seconds or 3600
 	local error_ttl = opts.error_ttl_seconds or 0
 	if opts.max_concurrent then
 		max_concurrent = opts.max_concurrent
 	end
-	if not opts.force and fresh(cache[name], ttl, error_ttl) then
-		callback(cache[name])
+	if not opts.force and fresh(cache[key], ttl, error_ttl) then
+		callback(cache[key])
 		return
 	end
-	-- Already fetching this package: ride the in-flight request rather than
-	-- spawning another curl. The running request is hitting the network now, so
-	-- its result is fresh enough to satisfy a concurrent force as well.
-	local waiters = pending[name]
+	-- Already fetching this package on this endpoint: ride the in-flight request
+	-- rather than spawning another curl.
+	local waiters = pending[key]
 	if waiters then
 		waiters[#waiters + 1] = callback
 		return
 	end
-	pending[name] = { callback }
+	pending[key] = { callback }
 	if in_flight < max_concurrent then
 		spawn(name, opts)
 	else

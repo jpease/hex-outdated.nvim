@@ -98,6 +98,51 @@ describe("actions.versions float", function()
 	end)
 end)
 
+describe("actions.versions prerelease selection", function()
+	it("inserts the full prerelease version string under a pessimistic operator", function()
+		local line = '      {:dep, "~> 1.0"},'
+		local buf = mix_buf(line)
+		local s = line:find('"')
+		local dep = {
+			name = "dep",
+			row = 0,
+			col_start = s,
+			col_end = s + #"~> 1.0",
+			requirement = "~> 1.0",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			op = "~>",
+		}
+		local fetch = function(_, cb)
+			cb({ versions = { "2.0.0-rc.1", "1.9.0" } })
+		end
+		actions.versions(buf, dep, fetch)
+
+		local function float_win()
+			for _, w in ipairs(vim.api.nvim_list_wins()) do
+				if vim.api.nvim_win_get_config(w).relative ~= "" then
+					return w
+				end
+			end
+		end
+		vim.wait(500, function()
+			return float_win() ~= nil
+		end, 5)
+
+		local win = float_win()
+		truthy(win, "float opened")
+		-- select the first line (2.0.0-rc.1) and press Enter
+		vim.api.nvim_win_set_cursor(win, { 1, 0 })
+		vim.api.nvim_feedkeys(
+			vim.api.nvim_replace_termcodes("<cr>", true, false, true),
+			"x",
+			false
+		)
+
+		local result = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+		eq('      {:dep, "~> 2.0.0-rc.1"},', result)
+	end)
+end)
+
 describe("actions.open", function()
 	it("opens the effective Hex package for an aliased dependency", function()
 		local original = vim.ui.open
