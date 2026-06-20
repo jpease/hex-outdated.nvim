@@ -200,14 +200,22 @@ describe("api.get_package in-flight coalescing", function()
 
 	it("makes separate requests for the same package on different endpoints", function()
 		local results = {}
-		api.get_package("demo", { base_url = "https://one.test/api", ttl_seconds = 3600 }, function(r)
-			results[#results + 1] = r
-		end)
+		api.get_package(
+			"demo",
+			{ base_url = "https://one.test/api", ttl_seconds = 3600 },
+			function(r)
+				results[#results + 1] = r
+			end
+		)
 		complete_last()
 
-		api.get_package("demo", { base_url = "https://two.test/api", ttl_seconds = 3600 }, function(r)
-			results[#results + 1] = r
-		end)
+		api.get_package(
+			"demo",
+			{ base_url = "https://two.test/api", ttl_seconds = 3600 },
+			function(r)
+				results[#results + 1] = r
+			end
+		)
 		complete_last()
 
 		assert.are.equal(2, system_calls)
@@ -386,5 +394,103 @@ describe("api.get_package spawn failure", function()
 
 		assert.are.equal(2, system_calls) -- not poisoned: the second call attempts again
 		assert.is_truthy(retried.error)
+	end)
+end)
+
+describe("api.get_package max_concurrent validation", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+	local warnings
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		warnings = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return { releases = { { version = "1.0.0" } }, latest_stable_version = "1.0.0" }
+				end,
+			},
+			notify = function(msg, _level)
+				warnings[#warnings + 1] = msg
+			end,
+			log = { levels = { WARN = 2 } },
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	local function complete_last()
+		exits[#exits]({ code = 0, stdout = "body\n200" })
+	end
+
+	it("clamps zero to 1 and emits a warning", function()
+		local done = false
+		api.get_package("a", { max_concurrent = 0 }, function()
+			done = true
+		end)
+		complete_last()
+
+		assert.is_true(done)
+		assert.are.equal(1, system_calls)
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("max_concurrent"))
+	end)
+
+	it("clamps a negative value to 1 and emits a warning", function()
+		local done = false
+		api.get_package("a", { max_concurrent = -5 }, function()
+			done = true
+		end)
+		complete_last()
+
+		assert.is_true(done)
+		assert.are.equal(1, #warnings)
+	end)
+
+	it("floors a fractional value greater than 1 without warning", function()
+		api.get_package("a", { max_concurrent = 1.9 }, function() end)
+		api.get_package("b", { max_concurrent = 1.9 }, function() end)
+
+		assert.are.equal(1, system_calls) -- floored to 1; "b" queued
+		assert.are.equal(0, #warnings)
+		complete_last()
+		assert.are.equal(2, system_calls)
+	end)
+
+	it("clamps a non-number to 1 and emits a warning", function()
+		local done = false
+		api.get_package("a", { max_concurrent = "2" }, function()
+			done = true
+		end)
+		complete_last()
+
+		assert.is_true(done)
+		assert.are.equal(1, #warnings)
+	end)
+
+	it("accepts a valid positive integer without warning", function()
+		api.get_package("a", { max_concurrent = 2 }, function() end)
+		api.get_package("b", { max_concurrent = 2 }, function() end)
+
+		assert.are.equal(2, system_calls) -- both slots available; no queuing
+		assert.are.equal(0, #warnings)
 	end)
 end)

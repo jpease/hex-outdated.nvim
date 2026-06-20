@@ -1,6 +1,7 @@
 local M = {}
 
--- "endpoint|name" -> { versions = {...}, latest = "x.y.z", time = epoch } | { error = msg, not_found = bool }
+-- "endpoint|name" -> { versions = {...}, latest = "x.y.z", time = epoch }
+--                or { error = msg, not_found = bool }
 local cache = {}
 
 -- "endpoint|name" -> list of callbacks waiting on an in-flight request.
@@ -163,8 +164,20 @@ function M.get_package(name, opts, callback)
 	local key = cache_key(name, opts.base_url)
 	local ttl = opts.ttl_seconds or 3600
 	local error_ttl = opts.error_ttl_seconds or 0
-	if opts.max_concurrent then
-		max_concurrent = opts.max_concurrent
+	if opts.max_concurrent ~= nil then
+		local mc = opts.max_concurrent
+		if type(mc) ~= "number" or math.floor(mc) < 1 then
+			vim.notify(
+				string.format(
+					"hex-outdated: max_concurrent must be a positive integer (got %s); using 1",
+					tostring(mc)
+				),
+				vim.log.levels.WARN
+			)
+			max_concurrent = 1
+		else
+			max_concurrent = math.floor(mc)
+		end
 	end
 	if not opts.force and fresh(cache[key], ttl, error_ttl) then
 		callback(cache[key])
