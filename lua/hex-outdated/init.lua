@@ -80,11 +80,15 @@ local function attach(bufnr)
 	if not is_mixexs(bufnr) then
 		return
 	end
+	-- Per-buffer augroup: clearing it on each attach ensures repeated setup()
+	-- calls replace rather than accumulate buffer-local autocmds.
+	local buf_group = vim.api.nvim_create_augroup("HexOutdated_" .. bufnr, { clear = true })
 	core.state[bufnr] = core.state[bufnr]
 		or { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
 	-- Drop per-buffer state when the buffer goes away so state does not accumulate
 	-- across a long session of opening and closing mix.exs files.
 	vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
+		group = buf_group,
 		buffer = bufnr,
 		once = true,
 		callback = function()
@@ -107,6 +111,7 @@ local function attach(bufnr)
 	if config.options.auto_update then
 		local timer
 		vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "InsertLeave" }, {
+			group = buf_group,
 			buffer = bufnr,
 			callback = function()
 				if timer then

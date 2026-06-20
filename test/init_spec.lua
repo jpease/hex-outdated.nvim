@@ -40,3 +40,20 @@ describe("lock lens toggle", function()
 		eq(not before, core.state[buf].lock_lens, "lens flips")
 	end)
 end)
+
+describe("repeated setup does not duplicate autocmds", function()
+	it("leaves exactly one set of buffer-local autocmds after two setup calls", function()
+		hex.setup({ enabled = false })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+		local after_first = #vim.api.nvim_get_autocmds({ buffer = buf })
+		truthy(after_first > 0, "at least one autocmd after first setup")
+
+		hex.setup({ enabled = false })
+		local after_second = #vim.api.nvim_get_autocmds({ buffer = buf })
+
+		eq(after_first, after_second, "autocmd count unchanged after second setup")
+	end)
+end)
