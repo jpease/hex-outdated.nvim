@@ -75,11 +75,14 @@ describe("version.classify", function()
 		assert.are.equal("~> 2.1.6-dev", r.suggested)
 	end)
 
-	it("reports upgradable when a strict-less-than constraint excludes the latest release", function()
-		local r = version.classify("< 2.0.0", { "1.9.0", "2.0.0" })
-		assert.are.equal("upgradable", r.status)
-		assert.are.equal("2.0.0", r.latest)
-	end)
+	it(
+		"reports upgradable when a strict-less-than constraint excludes the latest release",
+		function()
+			local r = version.classify("< 2.0.0", { "1.9.0", "2.0.0" })
+			assert.are.equal("upgradable", r.status)
+			assert.are.equal("2.0.0", r.latest)
+		end
+	)
 
 	it("reports upgradable when not-equal excludes the latest release", function()
 		local r = version.classify("!= 3.0.0", { "1.0.0", "2.0.0", "3.0.0" })

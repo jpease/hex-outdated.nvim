@@ -132,11 +132,7 @@ describe("actions.versions prerelease selection", function()
 		truthy(win, "float opened")
 		-- select the first line (2.0.0-rc.1) and press Enter
 		vim.api.nvim_win_set_cursor(win, { 1, 0 })
-		vim.api.nvim_feedkeys(
-			vim.api.nvim_replace_termcodes("<cr>", true, false, true),
-			"x",
-			false
-		)
+		vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<cr>", true, false, true), "x", false)
 
 		local result = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
 		eq('      {:dep, "~> 2.0.0-rc.1"},', result)

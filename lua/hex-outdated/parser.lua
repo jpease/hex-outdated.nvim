@@ -78,7 +78,8 @@ function M.parse_lines(lines)
 				local content = code:match('([^"]*)"', quote_pos + 1)
 				if content then
 					local next_brace = code:find("{", quote_pos + #content + 2)
-					local tuple_text = code:sub(match_start, next_brace and (next_brace - 1) or #code)
+					local tuple_text =
+						code:sub(match_start, next_brace and (next_brace - 1) or #code)
 					deps[#deps + 1] = {
 						name = name,
 						package = package_alias(tuple_text),
