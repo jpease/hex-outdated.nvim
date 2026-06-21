@@ -1,3 +1,6 @@
+local util = require("hex-outdated.util")
+local version = require("hex-outdated.version")
+
 local M = {}
 
 -- "endpoint|name" -> { versions = {...}, latest = "x.y.z", time = epoch }
@@ -46,17 +49,39 @@ end
 
 local function curl_command(name, opts)
 	local base = opts.base_url or "https://hex.pm/api"
-	local timeout_s = math.max(1, math.floor((opts.timeout_ms or 5000) / 1000))
+	local timeout_s = util.timeout_seconds(opts.timeout_ms, 5000)
 	local url = string.format("%s/packages/%s", base, name)
 	return {
 		"curl",
 		"-sSL",
 		"--max-time",
-		tostring(timeout_s),
+		string.format("%.15g", timeout_s),
 		"-w",
 		"\n%{http_code}",
 		url,
 	}
+end
+
+local function latest_active_version(versions)
+	local latest, latest_parsed
+	local latest_stable, latest_stable_parsed
+	for _, raw in ipairs(versions) do
+		local parsed = version.parse(raw)
+		if parsed then
+			if not latest_parsed or version.compare(parsed, latest_parsed) > 0 then
+				latest = raw
+				latest_parsed = parsed
+			end
+			if
+				version.is_stable(parsed)
+				and (not latest_stable_parsed or version.compare(parsed, latest_stable_parsed) > 0)
+			then
+				latest_stable = raw
+				latest_stable_parsed = parsed
+			end
+		end
+	end
+	return latest_stable or latest or versions[1]
 end
 
 -- Common curl exit codes, mapped to messages a user can act on. Anything else
@@ -87,17 +112,33 @@ local function parse_package_response(obj, decode_json, now)
 	if not ok or type(data) ~= "table" then
 		return { error = "invalid response" }
 	end
+	local retirements = type(data.retirements) == "table" and data.retirements or {}
 	local versions = {}
+	local active = {}
+	local saw_release = false
 	for _, rel in ipairs(data.releases or {}) do
 		if rel.version then
-			versions[#versions + 1] = rel.version
+			saw_release = true
+			if retirements[rel.version] == nil then
+				versions[#versions + 1] = rel.version
+				active[rel.version] = true
+			end
 		end
 	end
-	return {
+	local latest = data.latest_stable_version or data.latest_version
+	if saw_release and (not latest or not active[latest]) then
+		latest = latest_active_version(versions)
+	end
+	local result = {
 		versions = versions,
-		latest = data.latest_stable_version or data.latest_version,
+		latest = latest,
+		retirements = retirements,
 		time = now(),
 	}
+	if saw_release and #versions == 0 then
+		result.all_retired = true
+	end
+	return result
 end
 
 M._curl_command = curl_command

@@ -8,7 +8,7 @@ describe("hex_api pure helpers", function()
 					"curl",
 					"-sSL",
 					"--max-time",
-					"5",
+					"5.2",
 					"-w",
 					"\n%{http_code}",
 					"https://example.test/api/packages/jason",
@@ -46,6 +46,7 @@ describe("hex_api pure helpers", function()
 			assert.are.same({
 				versions = { "1.7.14", "1.6.16" },
 				latest = "1.7.14",
+				retirements = {},
 				time = 123,
 			}, result)
 		end)
@@ -61,8 +62,55 @@ describe("hex_api pure helpers", function()
 			assert.are.same({
 				versions = {},
 				latest = "1.8.0-rc.0",
+				retirements = {},
 				time = 123,
 			}, result)
+		end)
+
+		it("excludes retired releases and chooses the latest active release", function()
+			local result = hex_api._parse_package_response({
+				code = 0,
+				stdout = "{}\n200",
+			}, function()
+				return {
+					latest_stable_version = "2.0.0",
+					latest_version = "2.0.0",
+					releases = {
+						{ version = "2.0.0" },
+						{ version = "1.9.0" },
+						{ version = "1.8.0" },
+					},
+					retirements = {
+						["2.0.0"] = { reason = "invalid" },
+					},
+				}
+			end, now)
+
+			assert.are.same({ "1.9.0", "1.8.0" }, result.versions)
+			assert.are.equal("1.9.0", result.latest)
+			assert.are.same({ reason = "invalid" }, result.retirements["2.0.0"])
+			assert.is_nil(result.all_retired)
+		end)
+
+		it("returns no active versions when every release is retired", function()
+			local result = hex_api._parse_package_response({
+				code = 0,
+				stdout = "{}\n200",
+			}, function()
+				return {
+					latest_stable_version = "1.0.0",
+					releases = {
+						{ version = "1.0.0" },
+					},
+					retirements = {
+						["1.0.0"] = { reason = "invalid" },
+					},
+				}
+			end, now)
+
+			assert.are.same({}, result.versions)
+			assert.is_nil(result.latest)
+			assert.is_true(result.all_retired)
 		end)
 
 		it("describes curl exit codes so failures are actionable", function()

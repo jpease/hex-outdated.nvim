@@ -94,13 +94,19 @@ The actions are exposed as Lua functions so you can bind your own keys: >lua
     toggle    Enable/disable the inline display for the current buffer.
     upgrade   Rewrite the requirement under the cursor to the latest published
               version.
-    versions  Floating window of published versions; <CR> inserts the selected
-              one, q / <Esc> closes.
+    versions  Floating window of active published versions; <CR> inserts the
+              selected one, q / <Esc> closes.
     open      Open the package's page on hex.pm in a browser.
     info      Floating detail view (requirement / locked / latest) for the
               dependency under the cursor.
     lock      Toggle the per-buffer lock lens (a `locked X / latest Y` line
               under each dependency).
+
+Selecting a release from `versions` preserves the current requirement
+operator: comparison requirements stay comparisons, bare exact versions stay
+bare, and `~>` keeps its existing precision (with full prerelease versions
+preserved). Retired Hex releases are excluded from status calculations and the
+popup.
 
 ==============================================================================
 6. STATUS MEANINGS                                          *hex-outdated-status*
@@ -143,7 +149,7 @@ to false to leave K alone.
       debounce_ms = 500,
       api = {
         base_url = "https://hex.pm/api",
-        timeout_ms = 5000,
+        timeout_ms = 5000,    -- invalid/non-positive values use 5000
         max_concurrent = 8,    -- cap on simultaneous curl processes
       },
       cache = {
@@ -210,10 +216,10 @@ tuples inside the function referenced by the project's `deps:` setting
 `{:local_app, "~> 2.0", hex: :actual_package}` are used for API lookups while
 the local application name remains associated with `mix.lock`. For each Hex
 dependency the plugin asynchronously queries
-`https://hex.pm/api/packages/:name` (cached), then compares your requirement
-against the published versions using Hex prerelease semantics. The requirement
-status comes from `mix.exs` alone; `mix.lock` is read locally only for the
-optional lock context (see |hex-outdated-lock|). There is no shelling out to
-`mix`.
+`https://hex.pm/api/packages/:name` (cached), excludes retired releases, then
+compares your requirement against the active published versions using Hex
+prerelease semantics. The requirement status comes from `mix.exs` alone;
+`mix.lock` is read locally only for the optional lock context (see
+|hex-outdated-lock|). There is no shelling out to `mix`.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

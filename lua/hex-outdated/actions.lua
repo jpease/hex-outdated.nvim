@@ -8,6 +8,22 @@ local function package_name(dep)
 	return dep.package or dep.name
 end
 
+local function context_is_current(win, bufnr, cursor)
+	if
+		not (
+			vim.api.nvim_win_is_valid(win)
+			and vim.api.nvim_buf_is_valid(bufnr)
+			and vim.api.nvim_get_current_win() == win
+			and vim.api.nvim_get_current_buf() == bufnr
+			and vim.api.nvim_win_get_buf(win) == bufnr
+		)
+	then
+		return false
+	end
+	local current = vim.api.nvim_win_get_cursor(win)
+	return not cursor or (current[1] == cursor[1] and current[2] == cursor[2])
+end
+
 local function replace_requirement(bufnr, dep, replacement)
 	if not vim.api.nvim_buf_is_valid(bufnr) then
 		return false
@@ -82,13 +98,33 @@ end
 
 --- Return the dep whose row matches the cursor, or nil.
 function M.dep_at_cursor(deps)
-	local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local row = cursor[1] - 1
+	local col = cursor[2]
+	local nearest
+	local nearest_distance
 	for _, dep in ipairs(deps or {}) do
 		if dep.row == row then
-			return dep
+			if dep.col_start and dep.col_end then
+				if col >= dep.col_start and col < dep.col_end then
+					return dep
+				end
+				local distance
+				if col < dep.col_start then
+					distance = dep.col_start - col
+				else
+					distance = col - dep.col_end
+				end
+				if nearest_distance == nil or distance < nearest_distance then
+					nearest = dep
+					nearest_distance = distance
+				end
+			elseif not nearest then
+				nearest = dep
+			end
 		end
 	end
-	return nil
+	return nearest
 end
 
 --- Replace the requirement under the cursor with its suggested upgrade.
@@ -112,17 +148,36 @@ end
 -- Build a requirement string for an inserted version, preserving the operator style.
 -- Prerelease versions always keep the full version string under ~> so the operand
 -- actually selects the chosen release (a stable ~> x.y operand would not match it).
-local function requirement_for(op, version_str)
+local function format_operator(dep, op, operand)
+	local raw = dep.requirement or ""
+	local leading, _, spacing = raw:match("^(%s*)([~><=!]+)(%s*)")
+	local trailing = raw:match("(%s*)$") or ""
+	if not leading then
+		leading, spacing = "", " "
+	end
+	return leading .. op .. spacing .. operand .. trailing
+end
+
+local function requirement_for(dep, version_str)
+	local op = dep_op(dep)
 	if op == "~>" then
 		if version_str:find("-", 1, true) then
-			return string.format("~> %s", version_str)
+			return format_operator(dep, op, version_str)
 		end
 		local major, minor = version_str:match("^(%d+)%.(%d+)")
 		if major and minor then
-			return string.format("~> %s.%s", major, minor)
+			return format_operator(dep, op, string.format("%s.%s", major, minor))
 		end
 	end
-	return string.format("== %s", version_str)
+	if op == "==" and dep.requirement and dep.requirement:match("^%s*%d") then
+		local leading = dep.requirement:match("^(%s*)") or ""
+		local trailing = dep.requirement:match("(%s*)$") or ""
+		return leading .. version_str .. trailing
+	end
+	if op then
+		return format_operator(dep, op, version_str)
+	end
+	return "== " .. version_str
 end
 
 --- Open a floating window listing published versions for the dep; selecting one
@@ -133,12 +188,20 @@ function M.versions(bufnr, dep, fetch)
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
 	end
+	local origin_win = vim.api.nvim_get_current_win()
+	local origin_cursor = vim.api.nvim_win_get_cursor(origin_win)
 	fetch(package_name(dep), function(res)
 		if res.error or not res.versions or #res.versions == 0 then
-			vim.notify("hex-outdated: " .. (res.error or "no versions found"), vim.log.levels.WARN)
+			local msg = res.error
+				or (res.all_retired and "no active versions found (all releases are retired)")
+				or "no versions found"
+			vim.notify("hex-outdated: " .. msg, vim.log.levels.WARN)
 			return
 		end
 		vim.schedule(function()
+			if not context_is_current(origin_win, bufnr, origin_cursor) then
+				return
+			end
 			local lines = res.versions -- newest-first per hex.pm ordering
 			local buf = vim.api.nvim_create_buf(false, true)
 			if buf == 0 then
@@ -177,7 +240,7 @@ function M.versions(bufnr, dep, fetch)
 				local selected = vim.api.nvim_get_current_line()
 				close()
 				if vim.api.nvim_buf_is_valid(bufnr) then
-					replace_requirement(bufnr, dep, requirement_for(dep_op(dep), selected))
+					replace_requirement(bufnr, dep, requirement_for(dep, selected))
 				end
 			end, { buffer = buf, nowait = true })
 		end)
@@ -192,9 +255,14 @@ function M.info(dep, fetch)
 		return
 	end
 	local origin = vim.api.nvim_get_current_buf()
+	local origin_win = vim.api.nvim_get_current_win()
+	local origin_cursor = vim.api.nvim_win_get_cursor(origin_win)
 
 	local function open()
 		vim.schedule(function()
+			if not context_is_current(origin_win, origin, origin_cursor) then
+				return
+			end
 			local lines = M._info_lines(dep)
 			local buf = vim.api.nvim_create_buf(false, true)
 			if buf == 0 then

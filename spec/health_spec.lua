@@ -13,3 +13,19 @@ describe("health._reachability_verdict", function()
 		assert.is_truthy(msg:find("7", 1, true))
 	end)
 end)
+
+describe("health._probe_command", function()
+	it("preserves fractional timeout seconds", function()
+		assert.are.same(
+			{ "curl", "-sS", "-o", "/dev/null", "--max-time", "1.999", "https://example.test" },
+			health._probe_command("https://example.test", 1999)
+		)
+	end)
+
+	it("falls back to five seconds for invalid timeout values", function()
+		assert.are.same(
+			{ "curl", "-sS", "-o", "/dev/null", "--max-time", "5", "https://example.test" },
+			health._probe_command("https://example.test", 0)
+		)
+	end)
+end)

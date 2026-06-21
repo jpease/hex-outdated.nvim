@@ -2,6 +2,7 @@
 -- published-versions floating window.
 local actions = require("hex-outdated.actions")
 local config = require("hex-outdated.config")
+local parser = require("hex-outdated.parser")
 
 config.setup({})
 
@@ -9,6 +10,28 @@ local function mix_buf(line)
 	local buf = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
 	return buf
+end
+
+local function float_win()
+	for _, w in ipairs(vim.api.nvim_list_wins()) do
+		if vim.api.nvim_win_get_config(w).relative ~= "" then
+			return w
+		end
+	end
+end
+
+local function select_first_version(buf, dep, versions)
+	vim.api.nvim_set_current_buf(buf)
+	actions.versions(buf, dep, function(_, cb)
+		cb({ versions = versions })
+	end)
+	vim.wait(500, function()
+		return float_win() ~= nil
+	end, 5)
+	local win = float_win()
+	truthy(win, "versions float opened")
+	vim.api.nvim_win_set_cursor(win, { 1, 0 })
+	vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<cr>", true, false, true), "x", false)
 end
 
 describe("actions.upgrade", function()
@@ -59,6 +82,7 @@ end)
 describe("actions.versions float", function()
 	it("opens a wiped, filetyped float listing the versions", function()
 		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
 		local dep = {
 			name = "local_app",
 			package = "jason",
@@ -76,13 +100,6 @@ describe("actions.versions float", function()
 		eq("jason", requested, "Hex alias used for version lookup")
 
 		-- The window is created inside vim.schedule; wait for it to appear.
-		local function float_win()
-			for _, w in ipairs(vim.api.nvim_list_wins()) do
-				if vim.api.nvim_win_get_config(w).relative ~= "" then
-					return w
-				end
-			end
-		end
 		vim.wait(500, function()
 			return float_win() ~= nil
 		end, 5)
@@ -95,6 +112,68 @@ describe("actions.versions float", function()
 		eq("hex-outdated-versions", vim.bo[fbuf].filetype)
 		is_true(vim.wo[win].cursorline, "cursorline on for selection")
 		vim.api.nvim_win_close(win, true)
+	end)
+
+	it("does not offer a popup when every release is retired", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local notified
+		local original_notify = vim.notify
+		vim.notify = function(msg)
+			notified = msg
+		end
+
+		actions.versions(buf, { name = "jason" }, function(_, cb)
+			cb({ versions = {}, all_retired = true })
+		end)
+
+		vim.notify = original_notify
+		contains(notified, "all releases are retired")
+		is_nil(float_win(), "no versions float opened")
+	end)
+
+	it("cancels cleanly when the origin buffer closes before fetch completion", function()
+		local origin = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(origin)
+		local callback
+		local scheduled
+		local original_schedule = vim.schedule
+		vim.schedule = function(fn)
+			scheduled = fn
+		end
+
+		actions.versions(origin, { name = "jason" }, function(_, cb)
+			callback = cb
+		end)
+		vim.api.nvim_buf_delete(origin, { force = true })
+		callback({ versions = { "1.4.5" } })
+
+		local ok, err = pcall(scheduled)
+		vim.schedule = original_schedule
+		is_true(ok, tostring(err))
+		is_nil(float_win(), "no stale float opened")
+	end)
+
+	it("cancels cleanly when the cursor moves before fetch completion", function()
+		local origin = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(origin)
+		local callback
+		local scheduled
+		local original_schedule = vim.schedule
+		vim.schedule = function(fn)
+			scheduled = fn
+		end
+
+		actions.versions(origin, { name = "jason" }, function(_, cb)
+			callback = cb
+		end)
+		vim.api.nvim_win_set_cursor(0, { 1, 4 })
+		callback({ versions = { "1.4.5" } })
+
+		local ok, err = pcall(scheduled)
+		vim.schedule = original_schedule
+		is_true(ok, tostring(err))
+		is_nil(float_win(), "no stale float opened")
 	end)
 end)
 
@@ -115,15 +194,9 @@ describe("actions.versions prerelease selection", function()
 		local fetch = function(_, cb)
 			cb({ versions = { "2.0.0-rc.1", "1.9.0" } })
 		end
+		vim.api.nvim_set_current_buf(buf)
 		actions.versions(buf, dep, fetch)
 
-		local function float_win()
-			for _, w in ipairs(vim.api.nvim_list_wins()) do
-				if vim.api.nvim_win_get_config(w).relative ~= "" then
-					return w
-				end
-			end
-		end
 		vim.wait(500, function()
 			return float_win() ~= nil
 		end, 5)
@@ -136,6 +209,71 @@ describe("actions.versions prerelease selection", function()
 
 		local result = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
 		eq('      {:dep, "~> 2.0.0-rc.1"},', result)
+	end)
+
+	it("preserves comparison operators when inserting a selected version", function()
+		for _, case in ipairs({
+			{ requirement = ">= 1.0.0", expected = ">= 2.0.0" },
+			{ requirement = "< 3.0.0", expected = "< 2.0.0" },
+			{ requirement = "!= 1.5.0", expected = "!= 2.0.0" },
+			{ requirement = "1.0.0", expected = "2.0.0" },
+		}) do
+			local line = string.format('      {:dep, "%s"},', case.requirement)
+			local buf = mix_buf(line)
+			local s = line:find('"')
+			select_first_version(buf, {
+				name = "dep",
+				row = 0,
+				col_start = s,
+				col_end = s + #case.requirement,
+				requirement = case.requirement,
+				changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			}, { "2.0.0" })
+
+			eq(
+				string.format('      {:dep, "%s"},', case.expected),
+				vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1],
+				case.requirement
+			)
+		end
+	end)
+end)
+
+describe("actions.dep_at_cursor", function()
+	it("selects each dependency by requirement column on a compact fallback line", function()
+		local line = 'defp deps, do: [{:first, "~> 1.0"}, {:second, "~> 2.0"}]'
+		local buf = mix_buf(line)
+		vim.api.nvim_set_current_buf(buf)
+		local deps = parser.parse_lines({ line })
+
+		vim.api.nvim_win_set_cursor(0, { 1, line:find("~> 1.0", 1, true) - 1 })
+		eq("first", actions.dep_at_cursor(deps).name)
+
+		vim.api.nvim_win_set_cursor(0, { 1, line:find("~> 2.0", 1, true) - 1 })
+		eq("second", actions.dep_at_cursor(deps).name)
+	end)
+
+	it("selects each dependency by requirement column on a compact Treesitter line", function()
+		local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
+		if not (added_ok and added) then
+			skip("elixir parser not installed")
+		end
+		local line = '  defp deps, do: [{:first, "~> 1.0"}, {:second, "~> 2.0"}]'
+		local buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+			"defmodule Compact.MixProject do",
+			line,
+			"end",
+		})
+		vim.bo[buf].filetype = "elixir"
+		vim.api.nvim_set_current_buf(buf)
+		local deps = parser.parse_buffer(buf)
+
+		vim.api.nvim_win_set_cursor(0, { 2, line:find("~> 1.0", 1, true) - 1 })
+		eq("first", actions.dep_at_cursor(deps).name)
+
+		vim.api.nvim_win_set_cursor(0, { 2, line:find("~> 2.0", 1, true) - 1 })
+		eq("second", actions.dep_at_cursor(deps).name)
 	end)
 end)
 
@@ -172,13 +310,6 @@ describe("actions.info float", function()
 		end)
 		eq("jason", requested, "Hex alias used for detail lookup")
 
-		local function float_win()
-			for _, w in ipairs(vim.api.nvim_list_wins()) do
-				if vim.api.nvim_win_get_config(w).relative ~= "" then
-					return w
-				end
-			end
-		end
 		vim.wait(500, function()
 			return float_win() ~= nil
 		end, 5)
@@ -190,5 +321,27 @@ describe("actions.info float", function()
 		eq("local_app", lines[1])
 		eq("hex-outdated-info", vim.bo[fbuf].filetype)
 		vim.api.nvim_win_close(win, true)
+	end)
+
+	it("cancels cleanly when the origin buffer closes before fetch completion", function()
+		local origin = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(origin)
+		local callback
+		local scheduled
+		local original_schedule = vim.schedule
+		vim.schedule = function(fn)
+			scheduled = fn
+		end
+
+		actions.info({ name = "jason", requirement = "~> 1.0", status = "loading" }, function(_, cb)
+			callback = cb
+		end)
+		vim.api.nvim_buf_delete(origin, { force = true })
+		callback({ latest = "1.4.5", versions = { "1.4.5" } })
+
+		local ok, err = pcall(scheduled)
+		vim.schedule = original_schedule
+		is_true(ok, tostring(err))
+		is_nil(float_win(), "no stale float opened")
 	end)
 end)

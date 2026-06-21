@@ -1,4 +1,5 @@
 local config = require("hex-outdated.config")
+local util = require("hex-outdated.util")
 
 local M = {}
 
@@ -14,15 +15,26 @@ end
 
 M._reachability_verdict = reachability_verdict
 
+local function probe_command(base, timeout_ms)
+	return {
+		"curl",
+		"-sS",
+		"-o",
+		"/dev/null",
+		"--max-time",
+		string.format("%.15g", util.timeout_seconds(timeout_ms, 5000)),
+		base,
+	}
+end
+
+M._probe_command = probe_command
+
 -- Probe the configured API host, blocking briefly. Safe to block here because
 -- :checkhealth is an explicit, interactive command.
 local function probe_hex()
 	local base = config.options.api.base_url
-	local timeout_s = math.max(1, math.floor((config.options.api.timeout_ms or 5000) / 1000))
-	local out = vim.system(
-		{ "curl", "-sS", "-o", "/dev/null", "--max-time", tostring(timeout_s), base },
-		{ text = true }
-	):wait()
+	local out = vim.system(probe_command(base, config.options.api.timeout_ms), { text = true })
+		:wait()
 	return out.code
 end
 
