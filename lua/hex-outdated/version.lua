@@ -143,9 +143,13 @@ function M.parse_requirement(str)
 			if not ver then
 				return nil
 			end
-			-- ~> allows major.minor or major.minor.patch (precision >= 2).
-			-- All other operators require a full major.minor.patch version.
-			if op ~= "~>" and ver.precision < 3 then
+			-- ~> allows major.minor or major.minor.patch (precision >= 2); Elixir
+			-- rejects `~> 1`. All other operators require a full major.minor.patch.
+			if op == "~>" then
+				if ver.precision < 2 then
+					return nil
+				end
+			elseif ver.precision < 3 then
 				return nil
 			end
 			return { op = op, version = ver, raw = str }

@@ -91,4 +91,29 @@ describe("repeated setup removes stale keymaps (issue #28)", function()
 		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
 		eq(false, has_keymap(buf, "gU"), "gU removed after keymaps cleared")
 	end)
+
+	local function keymap_desc(bufnr, lhs)
+		for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+			if m.lhs == lhs then
+				return m.desc
+			end
+		end
+		return nil
+	end
+
+	it("does not delete a user mapping that replaced a plugin mapping", function()
+		hex.setup({ enabled = false, keymaps = { upgrade = "gU" } })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		truthy(has_keymap(buf, "gU"), "gU mapped after first setup")
+
+		-- The user re-binds the same lhs to their own action after setup.
+		vim.keymap.set("n", "gU", "<Nop>", { buffer = buf, desc = "user mapping" })
+
+		hex.setup({ enabled = false, keymaps = {} })
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		truthy(has_keymap(buf, "gU"), "user mapping on gU preserved")
+		eq("user mapping", keymap_desc(buf, "gU"), "user mapping not overwritten or deleted")
+	end)
 end)

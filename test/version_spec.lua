@@ -37,6 +37,12 @@ describe("version parse_requirement: precision rules", function()
 		truthy(version.parse_requirement("~> 1.2.3"), "~> 1.2.3 accepted")
 	end)
 
+	it("rejects ~> with a single component (issue #26)", function()
+		-- Elixir Version.parse_requirement("~> 1") returns :error.
+		is_nil(version.parse_requirement("~> 1"), "~> 1 rejected")
+		eq("unknown", version.classify("~> 1", { "1.2.3" }).status)
+	end)
+
 	it("classifies invalid version syntax as unknown", function()
 		local result = version.classify("== 01.2.3", { "1.2.3" })
 		eq("unknown", result.status)

@@ -42,6 +42,25 @@ describe("parser fallback", function()
 		eq(1, #deps)
 		eq("correct", deps[1].name)
 	end)
+
+	it("ignores a tuple inside an assignment-context list (issue #25)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			'  statuses = [{:ok, "not-a-dep"}]',
+			'  [{:jason, "~> 1.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+	end)
+
+	it("treats deps() with explicit empty parens as arity 0 (issue #27)", function()
+		local deps = parser.parse_lines({
+			'defp deps(), do: [{:jason, "~> 1.0"}]',
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+	end)
 end)
 
 local MIX = {
@@ -142,5 +161,36 @@ describe("parser (treesitter)", function()
 		local result = parser.parse_buffer(b)
 		eq(1, #result)
 		eq("correct", result[1].name)
+	end)
+
+	it("ignores a tuple inside an assignment-context list (issue #25)", function()
+		local mix_assign = {
+			"defmodule App.MixProject do",
+			"  defp deps do",
+			'    statuses = [{:ok, "not-a-dep"}]',
+			'    [{:jason, "~> 1.0"}]',
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_assign)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("jason", result[1].name)
+	end)
+
+	it("treats deps() with explicit empty parens as arity 0 (issue #27)", function()
+		local mix_empty_parens = {
+			"defmodule App.MixProject do",
+			'  defp deps(), do: [{:jason, "~> 1.0"}]',
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_empty_parens)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("jason", result[1].name)
 	end)
 end)

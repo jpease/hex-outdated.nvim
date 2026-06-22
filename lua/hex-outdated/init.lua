@@ -80,9 +80,24 @@ end
 -- on a subsequent setup() call.
 local buf_keymaps = {}
 
+-- All plugin-installed mappings carry a "hex-outdated:" desc; we use it as an
+-- ownership marker so we never delete a mapping the user has since put on the lhs.
+local KEYMAP_OWNER = "^hex%-outdated:"
+
+local function plugin_owns_mapping(bufnr, lhs)
+	for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+		if m.lhs == lhs then
+			return type(m.desc) == "string" and m.desc:match(KEYMAP_OWNER) ~= nil
+		end
+	end
+	return false
+end
+
 local function clear_buf_keymaps(bufnr)
 	for _, lhs in ipairs(buf_keymaps[bufnr] or {}) do
-		pcall(vim.keymap.del, "n", lhs, { buffer = bufnr })
+		if plugin_owns_mapping(bufnr, lhs) then
+			pcall(vim.keymap.del, "n", lhs, { buffer = bufnr })
+		end
 	end
 	buf_keymaps[bufnr] = nil
 end
