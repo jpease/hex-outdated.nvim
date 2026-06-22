@@ -20,10 +20,30 @@ function M.parse(str)
 	end
 	local parts = {}
 	for n in s:gmatch("(%d+)") do
+		-- Reject leading zeros (Elixir/SemVer: "01" is not the same as "1")
+		if #n > 1 and n:sub(1, 1) == "0" then
+			return nil
+		end
 		parts[#parts + 1] = tonumber(n)
 	end
 	if #parts == 0 or #parts > 3 then
 		return nil
+	end
+	-- Validate prerelease: dot-separated identifiers, each non-empty, only
+	-- [A-Za-z0-9-], numeric identifiers must not have leading zeros.
+	if pre then
+		for id in (pre .. "."):gmatch("([^%.]*)%.") do
+			if id == "" then
+				return nil
+			end
+			if id:match("^%d+$") then
+				if #id > 1 and id:sub(1, 1) == "0" then
+					return nil
+				end
+			elseif not id:match("^[%a%d%-]+$") then
+				return nil
+			end
+		end
 	end
 	return {
 		major = parts[1] or 0,
@@ -123,11 +143,17 @@ function M.parse_requirement(str)
 			if not ver then
 				return nil
 			end
+			-- ~> allows major.minor or major.minor.patch (precision >= 2).
+			-- All other operators require a full major.minor.patch version.
+			if op ~= "~>" and ver.precision < 3 then
+				return nil
+			end
 			return { op = op, version = ver, raw = str }
 		end
 	end
+	-- Bare version string treated as ==; requires full precision.
 	local ver = M.parse(s)
-	if ver then
+	if ver and ver.precision == 3 then
 		return { op = "==", version = ver, raw = str }
 	end
 	return nil

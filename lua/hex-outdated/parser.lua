@@ -35,13 +35,19 @@ local function configured_dep_function(lines)
 end
 
 local function function_start(line, name)
-	local indent, declared = line:match("^(%s*)defp%s+([%w_!?]+)")
-	if not declared then
-		indent, declared = line:match("^(%s*)def%s+([%w_!?]+)")
+	local indent, rest = line:match("^(%s*)defp?%s+(.*)")
+	if not rest then
+		return
 	end
-	if declared == name then
-		return indent, line:find(",%s*do%s*:") ~= nil
+	local declared, after = rest:match("^([%w_!?]+)(.*)")
+	if declared ~= name then
+		return
 	end
+	-- Skip arity > 0 definitions: function name immediately followed by '('
+	if after:match("^%s*%(") then
+		return
+	end
+	return indent, line:find(",%s*do%s*:") ~= nil
 end
 
 local function package_alias(text)
@@ -75,23 +81,33 @@ function M.parse_lines(lines)
 				if not name then
 					break
 				end
-				local content = code:match('([^"]*)"', quote_pos + 1)
-				if content then
-					local next_brace = code:find("{", quote_pos + #content + 2)
-					local tuple_text =
-						code:sub(match_start, next_brace and (next_brace - 1) or #code)
-					deps[#deps + 1] = {
-						name = name,
-						package = package_alias(tuple_text),
-						requirement = content,
-						kind = "hex",
-						row = i - 1,
-						col_start = quote_pos, -- 0-indexed position just inside the opening quote
-						col_end = quote_pos + #content, -- 0-indexed, exclusive end (the closing quote)
-					}
-					search_pos = quote_pos + #content + 2
+				-- Skip tuples on the RHS of an assignment (e.g. `meta = {:ok, "val"}`).
+				-- Check the non-whitespace character immediately before the '{'.
+				local before = code:sub(1, match_start - 1):match("^(.-)%s*$")
+				local lc = before:sub(-1)
+				local pc = #before > 1 and before:sub(-2, -2) or ""
+				local in_list = lc ~= "=" or pc == ">" or pc == "<" or pc == "!" or pc == "~"
+				if in_list then
+					local content = code:match('([^"]*)"', quote_pos + 1)
+					if content then
+						local next_brace = code:find("{", quote_pos + #content + 2)
+						local tuple_text =
+							code:sub(match_start, next_brace and (next_brace - 1) or #code)
+						deps[#deps + 1] = {
+							name = name,
+							package = package_alias(tuple_text),
+							requirement = content,
+							kind = "hex",
+							row = i - 1,
+							col_start = quote_pos, -- 0-indexed position just inside the opening quote
+							col_end = quote_pos + #content, -- 0-indexed, exclusive end (the closing quote)
+						}
+						search_pos = quote_pos + #content + 2
+					else
+						search_pos = quote_pos + 1
+					end
 				else
-					search_pos = quote_pos + 1
+					search_pos = match_start + 1
 				end
 			end
 			if one_line then
@@ -102,10 +118,11 @@ function M.parse_lines(lines)
 	return deps
 end
 
--- Direct-child (atom) then (string) inside a tuple. Because the string must be a
--- *direct* child of the tuple, keyword values like github: "owner/repo" (nested in
--- a keywords node) are not matched.
-local TS_QUERY = "(tuple (atom) @name (string) @req)"
+-- Tuples with a direct-child atom then string, inside a list. The list constraint
+-- excludes assignment-RHS tuples like `meta = {:ok, "val"}`; the direct-child
+-- constraint excludes keyword values like `github: "owner/repo"` (nested in a
+-- keywords node).
+local TS_QUERY = "(list (tuple (atom) @name (string) @req))"
 
 -- The query is a constant, but `parse_buffer` runs on every (debounced) edit.
 -- Compile it once and reuse; `query.parse` is not free per call.
@@ -166,11 +183,18 @@ local function definition_body(node)
 	return child_of_type(node, "do_block") or node
 end
 
+-- True when the definition head is a bare identifier (no parameter list), i.e. arity 0.
+local function is_def_arity_zero(node)
+	local arguments = child_of_type(node, "arguments")
+	local head = arguments and arguments:named_child(0)
+	return head ~= nil and head:type() == "identifier"
+end
+
 local function find_definition(node, bufnr, name)
 	if type(node.type) ~= "function" then
 		return node -- test doubles that only exercise query compilation
 	end
-	if definition_name(node, bufnr) == name then
+	if definition_name(node, bufnr) == name and is_def_arity_zero(node) then
 		return definition_body(node)
 	end
 	for i = 0, node:named_child_count() - 1 do

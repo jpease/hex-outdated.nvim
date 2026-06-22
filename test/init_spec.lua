@@ -57,3 +57,38 @@ describe("repeated setup does not duplicate autocmds", function()
 		eq(after_first, after_second, "autocmd count unchanged after second setup")
 	end)
 end)
+
+local function has_keymap(bufnr, lhs)
+	for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+		if m.lhs == lhs then
+			return true
+		end
+	end
+	return false
+end
+
+describe("repeated setup removes stale keymaps (issue #28)", function()
+	it("removes a hover key that is later disabled", function()
+		hex.setup({ enabled = false, popup = { hover_key = "gK" } })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		truthy(has_keymap(buf, "gK"), "gK mapped after first setup")
+
+		hex.setup({ enabled = false, popup = { hover_key = false } })
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		eq(false, has_keymap(buf, "gK"), "gK removed after hover_key disabled")
+	end)
+
+	it("removes a keymap action that is later cleared", function()
+		hex.setup({ enabled = false, keymaps = { upgrade = "gU" } })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		truthy(has_keymap(buf, "gU"), "gU mapped after first setup")
+
+		hex.setup({ enabled = false, keymaps = {} })
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		eq(false, has_keymap(buf, "gU"), "gU removed after keymaps cleared")
+	end)
+end)

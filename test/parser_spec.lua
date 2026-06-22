@@ -18,6 +18,30 @@ describe("parser fallback", function()
 		eq("local_app", deps[1].name)
 		eq("actual_package", deps[1].package)
 	end)
+
+	it("ignores non-dep tuples in assignment context (issue #25)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			'  metadata = {:ok, "not-a-dep"}',
+			'  [{:jason, "~> 1.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+	end)
+
+	it("selects deps/0 when deps/1 appears first (issue #27)", function()
+		local deps = parser.parse_lines({
+			"defp deps(env) do",
+			'  [{:wrong, "~> 1.0"}]',
+			"end",
+			"defp deps do",
+			'  [{:correct, "~> 2.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("correct", deps[1].name)
+	end)
 end)
 
 local MIX = {
@@ -82,5 +106,41 @@ describe("parser (treesitter)", function()
 		-- col_start sits just inside the opening quote; the slice is the requirement.
 		local line = MIX[d.row + 1]
 		eq("~> 1.0", line:sub(d.col_start + 1, d.col_end))
+	end)
+
+	it("ignores assignment-context tuples inside deps function (issue #25)", function()
+		local mix_nondep = {
+			"defmodule App.MixProject do",
+			"  defp deps do",
+			'    metadata = {:ok, "not-a-dep"}',
+			'    [{:jason, "~> 1.0"}]',
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_nondep)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("jason", result[1].name)
+	end)
+
+	it("selects deps/0 when deps/1 appears first (issue #27)", function()
+		local mix_arity = {
+			"defmodule App.MixProject do",
+			"  defp deps(env) do",
+			'    [{:wrong, "~> 1.0"}]',
+			"  end",
+			"  defp deps do",
+			'    [{:correct, "~> 2.0"}]',
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_arity)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("correct", result[1].name)
 	end)
 end)

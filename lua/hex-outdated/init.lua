@@ -76,10 +76,26 @@ function M.lock()
 	core.refresh_render(bufnr)
 end
 
+-- Plugin-owned keymaps per buffer, so they can be removed before re-installing
+-- on a subsequent setup() call.
+local buf_keymaps = {}
+
+local function clear_buf_keymaps(bufnr)
+	for _, lhs in ipairs(buf_keymaps[bufnr] or {}) do
+		pcall(vim.keymap.del, "n", lhs, { buffer = bufnr })
+	end
+	buf_keymaps[bufnr] = nil
+end
+
 local function attach(bufnr)
 	if not is_mixexs(bufnr) then
 		return
 	end
+	-- Remove keymaps installed by a previous setup() call before adding new ones.
+	clear_buf_keymaps(bufnr)
+	local installed = {}
+	buf_keymaps[bufnr] = installed
+
 	-- Per-buffer augroup: clearing it on each attach ensures repeated setup()
 	-- calls replace rather than accumulate buffer-local autocmds.
 	local buf_group = vim.api.nvim_create_augroup("HexOutdated_" .. bufnr, { clear = true })
@@ -93,6 +109,7 @@ local function attach(bufnr)
 		once = true,
 		callback = function()
 			core.state[bufnr] = nil
+			buf_keymaps[bufnr] = nil
 		end,
 	})
 	for action, lhs in pairs(config.options.keymaps or {}) do
@@ -103,6 +120,7 @@ local function attach(bufnr)
 				M[action],
 				{ buffer = bufnr, desc = "hex-outdated: " .. action }
 			)
+			installed[#installed + 1] = lhs
 		end
 	end
 	if config.options.enabled then
@@ -139,6 +157,7 @@ local function attach(bufnr)
 				vim.cmd("normal! K")
 			end
 		end, { buffer = bufnr, desc = "hex-outdated: info / hover" })
+		installed[#installed + 1] = hover
 	end
 end
 
