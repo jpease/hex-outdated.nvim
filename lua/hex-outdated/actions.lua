@@ -180,6 +180,38 @@ local function requirement_for(dep, version_str)
 	return "== " .. version_str
 end
 
+-- Open a small scratch float at the cursor showing `lines`. Shared scaffold for
+-- the versions picker and the info popup. The buffer is non-modifiable and wiped
+-- when its window hides so it does not linger; the filetype lets colorschemes and
+-- statuslines target it. Width fits the content (>= opts.min_width); height fits
+-- the line count, capped at opts.max_height when given. Returns win, buf — or nil
+-- when buffer creation fails. opts: { filetype, enter, min_width, max_height? }.
+local function open_cursor_float(lines, opts)
+	local buf = vim.api.nvim_create_buf(false, true)
+	if buf == 0 then
+		return nil
+	end
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	vim.bo[buf].modifiable = false
+	vim.bo[buf].bufhidden = "wipe"
+	vim.bo[buf].filetype = opts.filetype
+	local width = opts.min_width
+	for _, l in ipairs(lines) do
+		width = math.max(width, #l + 2)
+	end
+	local height = opts.max_height and math.min(#lines, opts.max_height) or #lines
+	local win = vim.api.nvim_open_win(buf, opts.enter or false, {
+		relative = "cursor",
+		row = 1,
+		col = 0,
+		width = width,
+		height = height,
+		border = config.options.popup.border,
+		style = "minimal",
+	})
+	return win, buf
+end
+
 --- Open a floating window listing published versions for the dep; selecting one
 --- (Enter) inserts it into the requirement; `q`/<Esc> closes.
 --- `fetch(name, cb)` is injected by the caller (wraps hex_api.get_package).
@@ -203,30 +235,15 @@ function M.versions(bufnr, dep, fetch)
 				return
 			end
 			local lines = res.versions -- newest-first per hex.pm ordering
-			local buf = vim.api.nvim_create_buf(false, true)
-			if buf == 0 then
+			local win, buf = open_cursor_float(lines, {
+				filetype = "hex-outdated-versions",
+				enter = true, -- focus the picker so the user can move + select
+				min_width = 20,
+				max_height = config.options.popup.max_height,
+			})
+			if not win then
 				return
 			end
-			vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-			vim.bo[buf].modifiable = false
-			-- Wipe the scratch buffer when its window closes so it does not linger,
-			-- and give it a filetype so colorschemes/statusline can target it.
-			vim.bo[buf].bufhidden = "wipe"
-			vim.bo[buf].filetype = "hex-outdated-versions"
-			local width = 20
-			for _, l in ipairs(lines) do
-				width = math.max(width, #l + 2)
-			end
-			local height = math.min(#lines, config.options.popup.max_height)
-			local win = vim.api.nvim_open_win(buf, true, {
-				relative = "cursor",
-				row = 1,
-				col = 0,
-				width = width,
-				height = height,
-				border = config.options.popup.border,
-				style = "minimal",
-			})
 			-- Highlight the active row so the selection target is obvious.
 			vim.wo[win].cursorline = true
 			local function close()
@@ -264,27 +281,14 @@ function M.info(dep, fetch)
 				return
 			end
 			local lines = M._info_lines(dep)
-			local buf = vim.api.nvim_create_buf(false, true)
-			if buf == 0 then
+			local win = open_cursor_float(lines, {
+				filetype = "hex-outdated-info",
+				enter = false, -- read-only hover: keep focus in the source buffer
+				min_width = 24,
+			})
+			if not win then
 				return
 			end
-			vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-			vim.bo[buf].modifiable = false
-			vim.bo[buf].bufhidden = "wipe"
-			vim.bo[buf].filetype = "hex-outdated-info"
-			local width = 24
-			for _, l in ipairs(lines) do
-				width = math.max(width, #l + 2)
-			end
-			local win = vim.api.nvim_open_win(buf, false, {
-				relative = "cursor",
-				row = 1,
-				col = 0,
-				width = width,
-				height = #lines,
-				border = config.options.popup.border,
-				style = "minimal",
-			})
 			-- Hover-style: close as soon as the user moves or leaves.
 			vim.api.nvim_create_autocmd({ "CursorMoved", "BufLeave", "InsertEnter" }, {
 				buffer = origin,
