@@ -194,3 +194,114 @@ describe("parser (treesitter)", function()
 		eq("jason", result[1].name)
 	end)
 end)
+
+-- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
+-- (parse_lines) independently implement the same dependency-extraction rules —
+-- arity-0 selection, assignment-RHS exclusion, alias resolution, and dep-list
+-- scoping. They must agree on well-formed mix.exs input. These cases pin that
+-- invariant so a rule added to one path cannot silently drift from the other.
+-- (parse_lines is pure Lua, so it runs in this headless suite alongside real
+-- Treesitter, letting us cross-check both parsers in one process.)
+describe("parser parity: treesitter vs fallback", function()
+	local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
+	if not (added_ok and added) then
+		it("treesitter elixir path", function()
+			skip("elixir parser not installed")
+		end)
+		return
+	end
+
+	-- Each case is a complete, valid mix.exs snippet exercising one shared rule.
+	local CASES = {
+		{
+			desc = "hex deps with scm tuples skipped",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				"    [",
+				'      {:phoenix, "~> 1.6"},',
+				'      {:jason, "~> 1.4", only: :test},',
+				'      {:my_dep, github: "owner/repo"},',
+				"    ]",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "aliased package via custom deps function",
+			lines = {
+				"defmodule App.MixProject do",
+				"  def project do",
+				"    [deps: project_deps()]",
+				"  end",
+				"  defp project_deps do",
+				'    [{:local_app, "~> 2.0", hex: :actual_package}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "assignment-RHS tuple excluded (issue #25)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				'    metadata = {:ok, "not-a-dep"}',
+				'    [{:jason, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "assignment-RHS list excluded (issue #25)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				'    statuses = [{:ok, "not-a-dep"}]',
+				'    [{:jason, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "deps/0 selected over deps/1 (issue #27)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps(env) do",
+				'    [{:wrong, "~> 1.0"}]',
+				"  end",
+				"  defp deps do",
+				'    [{:correct, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+	}
+
+	-- Project a dep list to the fields both parsers populate, so a deep-compare is
+	-- not tripped by incidental field differences.
+	local function shape(deps)
+		local out = {}
+		for i, d in ipairs(deps) do
+			out[i] = {
+				name = d.name,
+				requirement = d.requirement,
+				package = d.package,
+				row = d.row,
+				col_start = d.col_start,
+				col_end = d.col_end,
+			}
+		end
+		return out
+	end
+
+	for _, case in ipairs(CASES) do
+		it("agrees on " .. case.desc, function()
+			local b = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(b, 0, -1, false, case.lines)
+			vim.bo[b].filetype = "elixir"
+			local ts = shape(parser.parse_buffer(b))
+			local fallback = shape(parser.parse_lines(case.lines))
+			eq(ts, fallback, "treesitter vs fallback for: " .. case.desc)
+		end)
+	end
+end)
