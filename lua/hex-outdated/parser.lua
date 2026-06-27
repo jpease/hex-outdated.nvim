@@ -56,19 +56,50 @@ local function package_alias(text)
 	return text:match("hex%s*:%s*:([%w_]+)")
 end
 
+-- The bare-identifier expression returned by a function body, e.g. the final
+-- `deps` in `defp deps do\n  deps = [...]\n  deps\nend`. When present, the list
+-- assigned to that variable IS the dependency list and must not be excluded as a
+-- plain assignment RHS. Returns nil when the body's last expression is not a bare
+-- variable (e.g. a list literal or a composed `base() ++ [...]`).
+local function returned_variable(lines, dep_function)
+	local active = false
+	local function_indent
+	local last_expr
+	for _, line in ipairs(lines) do
+		local code = strip_comment(line)
+		if not active then
+			local indent, one_line = function_start(code, dep_function)
+			if indent ~= nil and not one_line then
+				active, function_indent, last_expr = true, indent, nil
+			end
+		elseif code:match("^" .. function_indent .. "end%s*$") then
+			return last_expr and last_expr:match("^%s*([%a_][%w_]*)%s*$") or nil
+		elseif code:match("%S") then
+			last_expr = code
+		end
+	end
+	return nil
+end
+
 -- Bracket/assignment tracker for the fallback parser. A dep tuple only counts
 -- when it sits inside a list literal that is NOT the right-hand side of an
 -- assignment, so `statuses = [{:ok, "x"}]` is excluded while the returned
--- `[{:jason, "~> 1.0"}]` is kept. `stack` holds one boolean per open `[` (is it
--- an assignment list); `assign` counts the open assignment lists. `last_sig` /
--- `prev_sig` persist across lines so a `[` opened on the line after `x =` is
--- still recognized as an assignment RHS.
-local function new_bracket_state()
+-- `[{:jason, "~> 1.0"}]` is kept. The one exception is a list assigned to the
+-- variable the function returns (`deps = [...]; deps`): `returned_var` names it so
+-- that assignment is treated as a real dep list. `stack` holds one boolean per
+-- open `[` (is it an excluded assignment list); `assign` counts the open excluded
+-- assignment lists. `last_sig` / `prev_sig` persist across lines so a `[` opened
+-- on the line after `x =` is still recognized as an assignment RHS; `last_ident` /
+-- `cur_ident` track the identifier preceding `=` to match `returned_var`.
+local function new_bracket_state(returned_var)
 	return {
 		stack = {},
 		assign = 0,
 		last_sig = "",
 		prev_sig = "",
+		last_ident = "",
+		cur_ident = "",
+		returned_var = returned_var,
 		col = 1,
 		in_string = false,
 		escaped = false,
@@ -92,7 +123,17 @@ local function advance_brackets(state, code, to)
 			end
 		elseif ch == '"' then
 			state.in_string = true
+			state.last_ident, state.cur_ident =
+				state.cur_ident ~= "" and state.cur_ident or state.last_ident, ""
+		elseif ch:match("[%w_]") then
+			-- Accumulate identifier characters; the completed word preceding a `=`
+			-- is the assignment target, compared against `returned_var` below.
+			state.cur_ident = state.cur_ident .. ch
+			state.prev_sig, state.last_sig = state.last_sig, ch
 		elseif not ch:match("%s") then
+			if state.cur_ident ~= "" then
+				state.last_ident, state.cur_ident = state.cur_ident, ""
+			end
 			if ch == "[" then
 				-- A single `=` (not `==`, `>=`, `<=`, `!=`, `~=`) before the list
 				-- marks it as an assignment RHS.
@@ -103,6 +144,11 @@ local function advance_brackets(state, code, to)
 					and p ~= "!"
 					and p ~= "~"
 					and p ~= "="
+				-- The list assigned to the variable the function returns is the dep
+				-- list itself, so keep it rather than excluding it.
+				if is_assign and state.returned_var and state.last_ident == state.returned_var then
+					is_assign = false
+				end
 				state.stack[#state.stack + 1] = is_assign
 				if is_assign then
 					state.assign = state.assign + 1
@@ -117,6 +163,9 @@ local function advance_brackets(state, code, to)
 				end
 			end
 			state.prev_sig, state.last_sig = state.last_sig, ch
+		elseif state.cur_ident ~= "" then
+			-- Whitespace ends an identifier without being a significant signal.
+			state.last_ident, state.cur_ident = state.cur_ident, ""
 		end
 		state.col = state.col + 1
 	end
@@ -127,6 +176,7 @@ end
 function M.parse_lines(lines)
 	local deps = {}
 	local dep_function = configured_dep_function(lines)
+	local returned_var = returned_variable(lines, dep_function)
 	local active = false
 	local function_indent
 	local one_line = false
@@ -137,7 +187,7 @@ function M.parse_lines(lines)
 			function_indent, one_line = function_start(code, dep_function)
 			active = function_indent ~= nil
 			if active then
-				brackets = new_bracket_state()
+				brackets = new_bracket_state(returned_var)
 			end
 		elseif code:match("^" .. function_indent .. "end%s*$") then
 			active = false
@@ -265,15 +315,40 @@ end
 -- of its do-block (or the whole keyword `do:` body when there is no block).
 -- Restricting the query to this subtree excludes intermediate statements such as
 -- `statuses = [{:ok, "x"}]` while keeping composed returns like `base() ++ [...]`.
-local function return_expression(body)
+-- When the body returns a bare variable (`deps = [...]; deps`), resolve it to the
+-- list assigned to that variable earlier in the block.
+local function return_expression(body, bufnr)
 	-- Guard against test doubles that only exercise query compilation.
-	if type(body.type) == "function" and body:type() == "do_block" then
-		local count = body:named_child_count()
-		if count > 0 then
-			return body:named_child(count - 1)
+	if type(body.type) ~= "function" or body:type() ~= "do_block" then
+		return body
+	end
+	local count = body:named_child_count()
+	if count == 0 then
+		return body
+	end
+	local last = body:named_child(count - 1)
+	if last:type() ~= "identifier" then
+		return last
+	end
+	-- Returned a bare variable: find its assignment (`var = ...`) in the block and
+	-- use the right-hand side. Scan backward so the nearest binding wins.
+	local var = node_text(last, bufnr)
+	for i = count - 2, 0, -1 do
+		local child = body:named_child(i)
+		if child:type() == "binary_operator" then
+			local operator = child:field("operator")[1]
+			local left = child:field("left")[1]
+			if
+				operator
+				and node_text(operator, bufnr) == "="
+				and left
+				and node_text(left, bufnr) == var
+			then
+				return child:field("right")[1] or last
+			end
 		end
 	end
-	return body
+	return last
 end
 
 -- True when the definition head takes no parameters (arity 0). That is either a
@@ -334,7 +409,7 @@ local function parse_treesitter(bufnr)
 	local current
 	-- iter_captures(node, source, start_row, end_row): yields capture id + node in
 	-- document order, so each @name precedes its sibling @req within a tuple.
-	for id, node in query:iter_captures(return_expression(body), bufnr, 0, -1) do
+	for id, node in query:iter_captures(return_expression(body, bufnr), bufnr, 0, -1) do
 		local capture = query.captures[id]
 		local text = node_text(node, bufnr)
 		if capture == "name" then

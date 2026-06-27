@@ -61,6 +61,32 @@ describe("parser fallback", function()
 		eq(1, #deps)
 		eq("jason", deps[1].name)
 	end)
+
+	it("parses a dep list assigned to a returned variable (issue #30)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  deps = [",
+			'    {:jason, "~> 1.0"}',
+			"  ]",
+			"  deps",
+			"end",
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+		eq("~> 1.0", deps[1].requirement)
+	end)
+
+	it("excludes an assignment list that is not the returned variable (issue #30)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			'  statuses = [{:ok, "not-a-dep"}]',
+			'  deps = [{:jason, "~> 1.0"}]',
+			"  deps",
+			"end",
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+	end)
 end)
 
 local MIX = {
@@ -193,6 +219,26 @@ describe("parser (treesitter)", function()
 		eq(1, #result)
 		eq("jason", result[1].name)
 	end)
+
+	it("parses a dep list assigned to a returned variable (issue #30)", function()
+		local mix_returned_var = {
+			"defmodule App.MixProject do",
+			"  defp deps do",
+			"    deps = [",
+			'      {:jason, "~> 1.0"}',
+			"    ]",
+			"    deps",
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_returned_var)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("jason", result[1].name)
+		eq("~> 1.0", result[1].requirement)
+	end)
 end)
 
 -- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
@@ -271,6 +317,31 @@ describe("parser parity: treesitter vs fallback", function()
 				"  end",
 				"  defp deps do",
 				'    [{:correct, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "dep list assigned to a returned variable (issue #30)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				"    deps = [",
+				'      {:jason, "~> 1.0"}',
+				"    ]",
+				"    deps",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "assignment list excluded while returned variable kept (issue #30)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				'    statuses = [{:ok, "not-a-dep"}]',
+				'    deps = [{:jason, "~> 1.0"}]',
+				"    deps",
 				"  end",
 				"end",
 			},
