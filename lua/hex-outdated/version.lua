@@ -6,7 +6,20 @@ function M.parse(str)
 		return nil
 	end
 	local s = str:match("^%s*(.-)%s*$")
-	s = s:gsub("%+.*$", "") -- strip build metadata
+	-- Split off build metadata (everything after the first "+"). It is ignored for
+	-- comparison precedence, but Elixir still validates its syntax: dot-separated,
+	-- non-empty identifiers of [A-Za-z0-9-] only. So "1.0.0+" (empty) and
+	-- "1.0.0+bad_meta" (underscore) are rejected while "1.0.0+bad.meta" is accepted.
+	local plus = s:find("+", 1, true)
+	if plus then
+		local build = s:sub(plus + 1)
+		s = s:sub(1, plus - 1)
+		for id in (build .. "."):gmatch("([^%.]*)%.") do
+			if not id:match("^[%a%d%-]+$") then
+				return nil
+			end
+		end
+	end
 	local pre
 	local main, prerelease = s:match("^([%d%.]+)%-(.+)$")
 	if main then

@@ -17,6 +17,32 @@ describe("version parse: leading zeros and invalid prerelease", function()
 		truthy(version.parse("1.0.0-alpha"), "alpha accepted")
 		truthy(version.parse("1.0.0-10"), "multi-digit numeric prerelease accepted")
 	end)
+
+	it("validates build metadata syntax (issue #29)", function()
+		is_nil(version.parse("1.0.0+"), "empty build metadata rejected")
+		is_nil(version.parse("1.0.0+bad_meta"), "underscore in build metadata rejected")
+		is_nil(version.parse("1.0.0-alpha+bad_meta"), "invalid build after prerelease rejected")
+		is_nil(version.parse("1.0.0+a..b"), "empty build identifier rejected")
+		truthy(version.parse("1.0.0+bad"), "1.0.0+bad accepted")
+		truthy(version.parse("1.0.0+bad.meta"), "dotted build metadata accepted")
+		truthy(version.parse("1.0.0-alpha+001"), "leading-zero build identifier accepted")
+	end)
+
+	it("ignores build metadata for comparison precedence (issue #29)", function()
+		eq(0, version.compare(version.parse("1.0.0+build"), version.parse("1.0.0")))
+		eq(0, version.compare(version.parse("1.0.0+a"), version.parse("1.0.0+b")))
+	end)
+
+	it("validates build metadata in parse_requirement (issue #29)", function()
+		is_nil(
+			version.parse_requirement("== 1.0.0+bad_meta"),
+			"invalid build in requirement rejected"
+		)
+		truthy(
+			version.parse_requirement("== 1.0.0+bad.meta"),
+			"valid build in requirement accepted"
+		)
+	end)
 end)
 
 describe("version parse_requirement: precision rules", function()
