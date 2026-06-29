@@ -98,6 +98,23 @@ describe("parser.parse_lines (fallback)", function()
 		assert.is_nil(deps[1].package)
 		assert.are.equal("actual_b", deps[2].package)
 	end)
+
+	it("excludes nested list literals inside a multi-line assignment (issue #31)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  metadata =",
+			"    if true do",
+			'      [{:ok, "not-a-dep"}]',
+			"    end",
+			"",
+			'  [{:jason, "~> 1.0"}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+		assert.are.equal("~> 1.0", deps[1].requirement)
+	end)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()

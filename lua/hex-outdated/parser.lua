@@ -91,6 +91,9 @@ end
 -- assignment lists. `last_sig` / `prev_sig` persist across lines so a `[` opened
 -- on the line after `x =` is still recognized as an assignment RHS; `last_ident` /
 -- `cur_ident` track the identifier preceding `=` to match `returned_var`.
+-- `assign_scope` is the indent of a statement whose RHS spans following lines (a
+-- line ending in a bare `=`); those more-indented lines are that RHS and excluded
+-- until indentation returns to the assignment's level. See `parse_lines`.
 local function new_bracket_state(returned_var)
 	return {
 		stack = {},
@@ -100,6 +103,7 @@ local function new_bracket_state(returned_var)
 		last_ident = "",
 		cur_ident = "",
 		returned_var = returned_var,
+		assign_scope = nil,
 		col = 1,
 		in_string = false,
 		escaped = false,
@@ -198,6 +202,18 @@ function M.parse_lines(lines)
 			brackets.col = 1
 			brackets.in_string = false
 			brackets.escaped = false
+			-- Multi-line assignment scope. The per-token `=`-before-`[` check only sees
+			-- the `=` when it is the most recent significant token, so a block-valued
+			-- assignment whose list sits past intervening tokens
+			-- (`meta =\n  if true do\n    [..]\n  end`) is missed. Track such an
+			-- assignment by the indent of its `x =` line: more-indented lines are its
+			-- RHS and excluded, until indentation returns to that level (a new
+			-- statement). Blank lines neither end nor belong to the scope.
+			local indent = #code:match("^%s*")
+			if code:match("%S") and brackets.assign_scope and indent <= brackets.assign_scope then
+				brackets.assign_scope = nil
+			end
+			local in_assign_scope = brackets.assign_scope ~= nil
 			-- Scan the entire line for dep tuples: a single line may hold multiple
 			-- entries (e.g. compact `do:` form). For each match we extract the
 			-- requirement from that specific tuple and scope the alias search to the
@@ -211,7 +227,9 @@ function M.parse_lines(lines)
 				-- A tuple counts only when it sits inside a non-assignment list, so
 				-- `meta = {:ok, "v"}` and `statuses = [{:ok, "v"}]` are both excluded.
 				advance_brackets(brackets, code, match_start)
-				local in_dep_list = #brackets.stack > 0 and brackets.assign == 0
+				local in_dep_list = #brackets.stack > 0
+					and brackets.assign == 0
+					and not in_assign_scope
 				if in_dep_list then
 					local content = code:match('([^"]*)"', quote_pos + 1)
 					if content then
@@ -238,6 +256,17 @@ function M.parse_lines(lines)
 			-- Finish scanning the line so closing brackets are accounted for before
 			-- the next line continues the bracket stack.
 			advance_brackets(brackets, code, #code + 1)
+			-- A line ending in a bare `=` opens a multi-line assignment RHS. Record its
+			-- indent so following, more-indented lines are excluded — unless the target
+			-- is the variable the function returns, whose assigned list IS the dep list
+			-- (handled by the per-token `returned_var` check) or unless a scope is
+			-- already open (keep the outermost so nested assignments stay excluded).
+			if not in_assign_scope and brackets.assign_scope == nil then
+				local target = code:match("([%a_][%w_!?]*)%s*=%s*$")
+				if target and target ~= returned_var then
+					brackets.assign_scope = indent
+				end
+			end
 			if one_line then
 				active = false
 			end

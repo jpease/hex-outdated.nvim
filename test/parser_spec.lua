@@ -87,6 +87,22 @@ describe("parser fallback", function()
 		eq(1, #deps)
 		eq("jason", deps[1].name)
 	end)
+
+	it("excludes a nested list inside a multi-line assignment (issue #31)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  metadata =",
+			"    if true do",
+			'      [{:ok, "not-a-dep"}]',
+			"    end",
+			"",
+			'  [{:jason, "~> 1.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+		eq("~> 1.0", deps[1].requirement)
+	end)
 end)
 
 local MIX = {
@@ -239,6 +255,28 @@ describe("parser (treesitter)", function()
 		eq("jason", result[1].name)
 		eq("~> 1.0", result[1].requirement)
 	end)
+
+	it("excludes a nested list inside a multi-line assignment (issue #31)", function()
+		local mix_nested_assign = {
+			"defmodule App.MixProject do",
+			"  defp deps do",
+			"    metadata =",
+			"      if true do",
+			'        [{:ok, "not-a-dep"}]',
+			"      end",
+			"",
+			'    [{:jason, "~> 1.0"}]',
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_nested_assign)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("jason", result[1].name)
+		eq("~> 1.0", result[1].requirement)
+	end)
 end)
 
 -- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
@@ -342,6 +380,21 @@ describe("parser parity: treesitter vs fallback", function()
 				'    statuses = [{:ok, "not-a-dep"}]',
 				'    deps = [{:jason, "~> 1.0"}]',
 				"    deps",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "nested list inside a multi-line assignment excluded (issue #31)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				"    metadata =",
+				"      if true do",
+				'        [{:ok, "not-a-dep"}]',
+				"      end",
+				"",
+				'    [{:jason, "~> 1.0"}]',
 				"  end",
 				"end",
 			},
