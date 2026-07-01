@@ -24,6 +24,24 @@ describe("util.deep_merge", function()
 		local out = util.deep_merge({ a = 1 }, { a = { x = 1 } })
 		assert.are.same({ x = 1 }, out.a)
 	end)
+
+	it("does not alias an override table that replaces a scalar (issue #37)", function()
+		local override = { a = { x = 1 } }
+		local out = util.deep_merge({ a = 1 }, override)
+		override.a.x = 99
+		assert.are.equal(1, out.a.x, "mutating the override after merge must not affect the result")
+	end)
+
+	it("does not alias an override table under a key absent from base (issue #37)", function()
+		local override = { my_extra = { a = 1 } }
+		local out = util.deep_merge({}, override)
+		override.my_extra.a = 2
+		assert.are.equal(
+			1,
+			out.my_extra.a,
+			"mutating the override after merge must not affect the result"
+		)
+	end)
 end)
 
 describe("util.timeout_seconds", function()

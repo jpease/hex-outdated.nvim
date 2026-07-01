@@ -13,6 +13,8 @@ function M.deep_merge(base, override)
 	for k, v in pairs(override or {}) do
 		if type(v) == "table" and type(out[k]) == "table" then
 			out[k] = M.deep_merge(out[k], v)
+		elseif type(v) == "table" then
+			out[k] = M.deep_merge(v, {})
 		else
 			out[k] = v
 		end
