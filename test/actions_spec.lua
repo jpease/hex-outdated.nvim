@@ -59,6 +59,44 @@ describe("actions.upgrade", function()
 		eq(line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "line unchanged")
 	end)
 
+	it("explains why there is no rewrite for an upgradable non-rewritable operator", function()
+		local line = '      {:jason, "< 2.0.0"},'
+		local buf = mix_buf(line)
+		local notified
+		local original_notify = vim.notify
+		vim.notify = function(msg)
+			notified = msg
+		end
+
+		actions.upgrade(buf, {
+			row = 0,
+			col_start = 16,
+			col_end = 25,
+			requirement = "< 2.0.0",
+			op = "<",
+			status = "upgradable",
+		})
+
+		vim.notify = original_notify
+		contains(notified, "no automatic rewrite for '<' requirements")
+		eq(line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "line unchanged")
+	end)
+
+	it("keeps the generic message when nothing is newer", function()
+		local line = '      {:jason, "~> 1.4"},'
+		local buf = mix_buf(line)
+		local notified
+		local original_notify = vim.notify
+		vim.notify = function(msg)
+			notified = msg
+		end
+
+		actions.upgrade(buf, { row = 0, col_start = 16, col_end = 22, status = "up_to_date" })
+
+		vim.notify = original_notify
+		eq("hex-outdated: nothing to upgrade on this line", notified)
+	end)
+
 	it("does not edit when the buffer changed after parsing", function()
 		local line = '      {:jason, "~> 1.0"},'
 		local buf = mix_buf(line)

@@ -130,6 +130,18 @@ end
 --- Replace the requirement under the cursor with its suggested upgrade.
 function M.upgrade(bufnr, dep)
 	if not dep or not dep.suggested then
+		if dep and (dep.status == "upgradable" or dep.status == "outdated") then
+			local op = dep_op(dep)
+			vim.notify(
+				string.format(
+					"hex-outdated: no automatic rewrite for '%s' requirements; "
+						.. "use :HexOutdated versions to choose one",
+					op or "?"
+				),
+				vim.log.levels.INFO
+			)
+			return
+		end
 		vim.notify("hex-outdated: nothing to upgrade on this line", vim.log.levels.INFO)
 		return
 	end
