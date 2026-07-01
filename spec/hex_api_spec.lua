@@ -445,7 +445,10 @@ describe("api.get_package spawn failure", function()
 	end)
 end)
 
-describe("api.get_package max_concurrent validation", function()
+-- get_package's own clamp is a silent defensive fallback (issue #35): the
+-- user-visible warning for invalid config now lives in config.setup(), which
+-- runs once per setup() call rather than once per dependency per refresh.
+describe("api.get_package max_concurrent clamping", function()
 	local old_vim
 	local api
 	local system_calls
@@ -489,7 +492,7 @@ describe("api.get_package max_concurrent validation", function()
 		exits[#exits]({ code = 0, stdout = "body\n200" })
 	end
 
-	it("clamps zero to 1 and emits a warning", function()
+	it("clamps zero to 1 without warning", function()
 		local done = false
 		api.get_package("a", { max_concurrent = 0 }, function()
 			done = true
@@ -498,11 +501,10 @@ describe("api.get_package max_concurrent validation", function()
 
 		assert.is_true(done)
 		assert.are.equal(1, system_calls)
-		assert.are.equal(1, #warnings)
-		assert.is_truthy(warnings[1]:find("max_concurrent"))
+		assert.are.equal(0, #warnings)
 	end)
 
-	it("clamps a negative value to 1 and emits a warning", function()
+	it("clamps a negative value to 1 without warning", function()
 		local done = false
 		api.get_package("a", { max_concurrent = -5 }, function()
 			done = true
@@ -510,7 +512,7 @@ describe("api.get_package max_concurrent validation", function()
 		complete_last()
 
 		assert.is_true(done)
-		assert.are.equal(1, #warnings)
+		assert.are.equal(0, #warnings)
 	end)
 
 	it("floors a fractional value greater than 1 without warning", function()
@@ -523,7 +525,7 @@ describe("api.get_package max_concurrent validation", function()
 		assert.are.equal(2, system_calls)
 	end)
 
-	it("clamps a non-number to 1 and emits a warning", function()
+	it("clamps a non-number to 1 without warning", function()
 		local done = false
 		api.get_package("a", { max_concurrent = "2" }, function()
 			done = true
@@ -531,7 +533,17 @@ describe("api.get_package max_concurrent validation", function()
 		complete_last()
 
 		assert.is_true(done)
-		assert.are.equal(1, #warnings)
+		assert.are.equal(0, #warnings)
+	end)
+
+	it("clamps repeatedly across many calls without ever warning (issue #35)", function()
+		-- Simulates config.api_opts() fanning an invalid value out to every
+		-- dependency on a refresh; the pre-fix code warned once per call here.
+		for i = 1, 30 do
+			api.get_package("dep" .. i, { max_concurrent = 0 }, function() end)
+		end
+
+		assert.are.equal(0, #warnings)
 	end)
 
 	it("accepts a valid positive integer without warning", function()

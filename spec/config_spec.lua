@@ -19,6 +19,57 @@ describe("config", function()
 	end)
 end)
 
+describe("config api.max_concurrent validation (issue #35)", function()
+	local old_vim
+	local warnings
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		warnings = {}
+		_G.vim = {
+			notify = function(msg, _level)
+				warnings[#warnings + 1] = msg
+			end,
+			log = { levels = { WARN = 2 } },
+		}
+	end)
+
+	after_each(function()
+		_G.vim = old_vim
+		config.setup({}) -- reset to defaults for subsequent describe blocks
+	end)
+
+	it("warns exactly once and clamps to 1 for an invalid value", function()
+		config.setup({ api = { max_concurrent = 0 } })
+
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("max_concurrent"))
+		assert.are.equal(1, config.options.api.max_concurrent)
+	end)
+
+	it("does not re-warn on a later valid setup call", function()
+		config.setup({ api = { max_concurrent = 0 } })
+		config.setup({ api = { max_concurrent = 4 } })
+
+		assert.are.equal(1, #warnings)
+		assert.are.equal(4, config.options.api.max_concurrent)
+	end)
+
+	it("does not warn for a valid positive integer", function()
+		config.setup({ api = { max_concurrent = 4 } })
+
+		assert.are.equal(0, #warnings)
+		assert.are.equal(4, config.options.api.max_concurrent)
+	end)
+
+	it("floors a fractional value greater than 1 without warning", function()
+		config.setup({ api = { max_concurrent = 2.9 } })
+
+		assert.are.equal(0, #warnings)
+		assert.are.equal(2, config.options.api.max_concurrent)
+	end)
+end)
+
 describe("config lock defaults", function()
 	it("exposes lock, hover_key, and lens text/highlight defaults", function()
 		config.setup({})

@@ -206,15 +206,10 @@ function M.get_package(name, opts, callback)
 	local ttl = opts.ttl_seconds or 3600
 	local error_ttl = opts.error_ttl_seconds or 0
 	if opts.max_concurrent ~= nil then
+		-- Config-level validation (config.setup) already warns once for invalid
+		-- values; this is a silent defensive clamp for callers that bypass it.
 		local mc = opts.max_concurrent
 		if type(mc) ~= "number" or math.floor(mc) < 1 then
-			vim.notify(
-				string.format(
-					"hex-outdated: max_concurrent must be a positive integer (got %s); using 1",
-					tostring(mc)
-				),
-				vim.log.levels.WARN
-			)
 			max_concurrent = 1
 		else
 			max_concurrent = math.floor(mc)
