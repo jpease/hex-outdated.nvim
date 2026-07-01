@@ -11,6 +11,28 @@ describe("setup", function()
 	end)
 end)
 
+describe("is_mixexs buffer name matching (issue #34)", function()
+	it("does not attach to an already-loaded buffer whose name merely ends in mix.exs", function()
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/remix.exs")
+
+		hex.setup({ enabled = false })
+
+		is_nil(core.state[buf], "remix.exs buffer must not be attached")
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
+
+	it("attaches to an already-loaded buffer named exactly mix.exs", function()
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+
+		hex.setup({ enabled = false })
+
+		truthy(core.state[buf], "mix.exs buffer must be attached")
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
+end)
+
 describe("per-buffer state lifecycle", function()
 	it("drops core.state when a mix.exs buffer is wiped", function()
 		local buf = vim.api.nvim_create_buf(true, false)

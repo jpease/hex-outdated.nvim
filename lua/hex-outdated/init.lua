@@ -9,7 +9,8 @@ local M = {}
 local SUBCOMMANDS = { "refresh", "toggle", "upgrade", "versions", "open", "info", "lock" }
 
 local function is_mixexs(bufnr)
-	return vim.api.nvim_buf_get_name(bufnr):match("mix%.exs$") ~= nil
+	local name = vim.api.nvim_buf_get_name(bufnr)
+	return name:match("[/\\]mix%.exs$") ~= nil or name == "mix.exs"
 end
 
 local function current_deps()
