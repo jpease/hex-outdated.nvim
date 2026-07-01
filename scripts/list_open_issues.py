@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
-"""List open issues as a nested tree built from GitHub's native sub-issue links.
+"""List open issues as a nested tree built from parent/child relationships.
 
-Hierarchy comes from each issue's formal `parent` (sub-issue) relationship, not from
-`#number` text mentions. Issues whose parent is closed (or otherwise not open) surface as
-top-level roots. Within each level, items sort by priority label then issue number.
+Hierarchy comes from three sources, in priority order:
+  Pass 0: native GitHub sub-issue links (`issue.parent`) — authoritative.
+  Pass 1: a "Parent epic: #N" line in the issue body (legacy/manual).
+  Pass 2: `#N` references inside an epic's own body or comments, for repos (like
+          this one) that track children via an "Ordered Checklist" instead of
+          native sub-issue links.
+
+Issues whose parent is closed (or otherwise not in the open set) surface as
+top-level roots. Root epics sort by their bare `[x/y]` title prefix (see
+`.claude/skills/issue-prefix-labels`); tasks under an epic sort by their
+`[X:x/y]` prefix when present, otherwise by priority label then issue number.
 """
 
 import json
+import re
 import subprocess
 import sys
+from collections import defaultdict
 
 OWNER = "jpease"
 REPO = "hex-outdated.nvim"
@@ -31,8 +41,10 @@ def get_issues():
           nodes {
             number
             title
+            body
             labels(first: 20) { nodes { name } }
             parent { number }
+            comments(first: 100) { nodes { body } }
           }
         }
       }
@@ -67,38 +79,113 @@ def get_priority(issue):
     return 99
 
 
+def is_epic(issue):
+    return "Epic:" in (issue.get("title") or "")
+
+
+def task_order_tag(issue):
+    """Parse the `x` out of a task's `[X:x/y]` title prefix (model letter present)."""
+    match = re.match(r"\s*\[[A-Za-z]+:(\d+)/\d+\]", issue.get("title", "") or "")
+    return int(match.group(1)) if match else None
+
+
+def epic_axis_tag(issue):
+    """Parse the `x` out of a top-level epic's bare `[x/y]` title prefix."""
+    match = re.match(r"\s*\[(\d+)/\d+\]", issue.get("title", "") or "")
+    return int(match.group(1)) if match else None
+
+
+def build_hierarchy(issues, issue_map):
+    children = defaultdict(list)  # parent_num -> [child_num, ...]
+    child_of = {}  # child_num -> parent_num
+
+    # Pass 0: native sub-issue relationships take precedence over body text.
+    for issue in issues:
+        num = issue["number"]
+        parent_obj = issue.get("parent")
+        if parent_obj:
+            parent = parent_obj["number"]
+            if parent in issue_map and num not in child_of:
+                child_of[num] = parent
+                children[parent].append(num)
+
+    # Pass 1: task/epic bodies declare their own parent via "Parent epic: #N".
+    for issue in issues:
+        num = issue["number"]
+        body = issue.get("body", "") or ""
+        match = re.search(r"^Parent epic[^:]*: #(\d+)", body, re.MULTILINE)
+        if match:
+            parent = int(match.group(1))
+            if parent in issue_map and num not in child_of:
+                child_of[num] = parent
+                children[parent].append(num)
+
+    # Pass 2: epics list children in their body/comments (Ordered Checklist).
+    for issue in issues:
+        num = issue["number"]
+        if not is_epic(issue):
+            continue
+        all_text = (
+            (issue.get("body", "") or "")
+            + "\n"
+            + "\n".join(c["body"] for c in issue["comments"]["nodes"])
+        )
+        for ref_str in re.findall(r"#(\d+)", all_text):
+            ref = int(ref_str)
+            if ref == num or ref not in issue_map:
+                continue
+            if is_epic(issue_map[ref]):
+                continue
+            if ref not in child_of:
+                child_of[ref] = num
+                children[num].append(ref)
+
+    return children, child_of
+
+
 def main():
     issues = get_issues()
     if not issues:
         return
 
     issue_map = {issue["number"]: issue for issue in issues}
+    children, child_of = build_hierarchy(issues, issue_map)
 
-    children = {num: [] for num in issue_map}
-    for issue in issues:
-        parent = issue.get("parent")
-        parent_num = parent["number"] if parent else None
-        if parent_num in issue_map:
-            children[parent_num].append(issue["number"])
-        else:
-            children.setdefault(None, []).append(issue["number"])
+    def child_sort_key(n):
+        issue = issue_map[n]
+        epic_first = 0 if is_epic(issue) else 1
+        tag = task_order_tag(issue)
+        if tag is not None:
+            return (epic_first, 0, tag, 0)
+        return (epic_first, 1, get_priority(issue), n)
 
-    roots = children.get(None, [])
+    def root_sort_key(n):
+        issue = issue_map[n]
+        epic_first = 0 if is_epic(issue) else 1
+        axis = epic_axis_tag(issue)
+        if axis is not None:
+            return (epic_first, 0, axis, 0)
+        return (epic_first, 1, get_priority(issue), n)
 
-    def sort_nums(nums):
-        return sorted(nums, key=lambda n: (get_priority(issue_map[n]), n))
+    for parent in children:
+        children[parent].sort(key=child_sort_key)
 
-    def render(num, depth):
+    roots = sorted((num for num in issue_map if num not in child_of), key=root_sort_key)
+
+    def print_tree(num, depth=0):
         issue = issue_map[num]
         priority = get_priority(issue)
         p_str = f"P{priority}" if priority < 99 else "---"
-        indent = "  " * depth
-        print(f"{indent}[{p_str}] #{num} - {issue['title']}")
-        for child in sort_nums(children.get(num, [])):
-            render(child, depth + 1)
+        prefix = "  " * depth
+        marker = "↳ " if depth > 0 else ""
+        print(f"{prefix}{marker}[{p_str}] #{num} - {issue['title']}")
+        for child in children.get(num, []):
+            print_tree(child, depth + 1)
 
-    for root in sort_nums(roots):
-        render(root, 0)
+    for root in roots:
+        print_tree(root)
+        if children.get(root):
+            print()
 
 
 if __name__ == "__main__":
