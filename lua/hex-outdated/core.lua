@@ -10,6 +10,18 @@ local M = {}
 -- bufnr -> { deps = {...}, enabled = bool }
 M.state = {}
 
+--- Return the buffer's state, seeding it from config defaults on first touch.
+-- Per-buffer `enabled`/`lock_lens` persist across calls once seeded; they are
+-- thereafter owned by the buffer (see toggle/lock).
+function M.ensure_state(bufnr)
+	local st = M.state[bufnr]
+	if not st then
+		st = { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
+		M.state[bufnr] = st
+	end
+	return st
+end
+
 function M.api_opts(extra)
 	local o = config.options
 	local opts = {
@@ -97,11 +109,7 @@ end
 --- Parse the buffer, render loading state, then fetch + classify each hex dep.
 function M.analyze(bufnr, opts)
 	opts = opts or {}
-	-- Per-buffer `enabled` persists across calls; it is seeded from the global
-	-- config on first analyze and thereafter owned by the buffer (see toggle).
-	local st = M.state[bufnr]
-		or { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
-	M.state[bufnr] = st
+	local st = M.ensure_state(bufnr)
 	st.deps = parser.parse_buffer(bufnr)
 	local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
 	local lockmap = {}

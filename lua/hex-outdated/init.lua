@@ -25,9 +25,8 @@ end
 
 function M.toggle()
 	local bufnr = vim.api.nvim_get_current_buf()
-	local st = core.state[bufnr] or { enabled = config.options.enabled }
+	local st = core.ensure_state(bufnr)
 	st.enabled = not st.enabled
-	core.state[bufnr] = st
 	if st.enabled then
 		core.analyze(bufnr)
 	else
@@ -71,9 +70,8 @@ function M.lock()
 		return
 	end
 	local bufnr = vim.api.nvim_get_current_buf()
-	local st = core.state[bufnr] or { enabled = config.options.enabled }
+	local st = core.ensure_state(bufnr)
 	st.lock_lens = not st.lock_lens
-	core.state[bufnr] = st
 	core.refresh_render(bufnr)
 end
 
@@ -115,8 +113,7 @@ local function attach(bufnr)
 	-- Per-buffer augroup: clearing it on each attach ensures repeated setup()
 	-- calls replace rather than accumulate buffer-local autocmds.
 	local buf_group = vim.api.nvim_create_augroup("HexOutdated_" .. bufnr, { clear = true })
-	core.state[bufnr] = core.state[bufnr]
-		or { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
+	core.ensure_state(bufnr)
 	-- Drop per-buffer state when the buffer goes away so state does not accumulate
 	-- across a long session of opening and closing mix.exs files.
 	vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
