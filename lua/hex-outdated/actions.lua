@@ -164,6 +164,13 @@ local function requirement_for(dep, version_str)
 		if version_str:find("-", 1, true) then
 			return format_operator(dep, op, version_str)
 		end
+		local req = dep.requirement and version.parse_requirement(dep.requirement)
+		if req and req.version.precision >= 3 then
+			local major, minor, patch = version_str:match("^(%d+)%.(%d+)%.(%d+)")
+			if major and minor and patch then
+				return format_operator(dep, op, string.format("%s.%s.%s", major, minor, patch))
+			end
+		end
 		local major, minor = version_str:match("^(%d+)%.(%d+)")
 		if major and minor then
 			return format_operator(dep, op, string.format("%s.%s", major, minor))

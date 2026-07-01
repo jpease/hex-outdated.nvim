@@ -237,6 +237,34 @@ describe("actions.versions prerelease selection", function()
 			)
 		end
 	end)
+
+	it(
+		"preserves the requirement's precision when inserting a selected version under ~>",
+		function()
+			for _, case in ipairs({
+				{ requirement = "~> 1.6.2", selected = "1.6.5", expected = "~> 1.6.5" },
+				{ requirement = "~> 1.0", selected = "1.4.2", expected = "~> 1.4" },
+			}) do
+				local line = string.format('      {:dep, "%s"},', case.requirement)
+				local buf = mix_buf(line)
+				local s = line:find('"')
+				select_first_version(buf, {
+					name = "dep",
+					row = 0,
+					col_start = s,
+					col_end = s + #case.requirement,
+					requirement = case.requirement,
+					changedtick = vim.api.nvim_buf_get_changedtick(buf),
+				}, { case.selected })
+
+				eq(
+					string.format('      {:dep, "%s"},', case.expected),
+					vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1],
+					case.requirement
+				)
+			end
+		end
+	)
 end)
 
 describe("actions.dep_at_cursor", function()
