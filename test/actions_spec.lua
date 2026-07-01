@@ -389,6 +389,64 @@ describe("actions.info float", function()
 		vim.api.nvim_win_close(win, true)
 	end)
 
+	it(
+		"classifies the dep once the fetch resolves, replacing the checking… note (issue #38)",
+		function()
+			local buf = mix_buf('      {:jason, "~> 1.0"},')
+			vim.api.nvim_set_current_buf(buf)
+			local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
+			actions.info(dep, function(_, cb)
+				cb({ latest = "1.4.5", versions = { "1.0.0", "1.4.5" } })
+			end)
+
+			vim.wait(500, function()
+				return float_win() ~= nil
+			end, 5)
+
+			local win = float_win()
+			truthy(win, "float opened")
+			local fbuf = vim.api.nvim_win_get_buf(win)
+			local lines = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
+			eq("upgradable", dep.status, "dep classified from the fetch result")
+			is_nil(
+				lines[2]:find("checking…", 1, true),
+				"requirement note is no longer 'checking…'"
+			)
+			truthy(
+				lines[2]:find("below latest", 1, true),
+				"requirement note reflects the classification"
+			)
+			vim.api.nvim_win_close(win, true)
+		end
+	)
+
+	it(
+		"leaves the checking… note when the fetch errors with no usable versions (issue #38)",
+		function()
+			local buf = mix_buf('      {:jason, "~> 1.0"},')
+			vim.api.nvim_set_current_buf(buf)
+			local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
+			actions.info(dep, function(_, cb)
+				cb({ error = "http 500" })
+			end)
+
+			vim.wait(500, function()
+				return float_win() ~= nil
+			end, 5)
+
+			local win = float_win()
+			truthy(win, "float opened")
+			local fbuf = vim.api.nvim_win_get_buf(win)
+			local lines = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
+			eq("loading", dep.status, "status unchanged on a fetch error with no versions")
+			truthy(
+				lines[2]:find("checking…", 1, true),
+				"requirement note unchanged on fetch error"
+			)
+			vim.api.nvim_win_close(win, true)
+		end
+	)
+
 	it("cancels cleanly when the origin buffer closes before fetch completion", function()
 		local origin = mix_buf('      {:jason, "~> 1.0"},')
 		vim.api.nvim_set_current_buf(origin)

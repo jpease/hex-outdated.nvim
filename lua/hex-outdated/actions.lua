@@ -325,7 +325,12 @@ function M.info(dep, fetch)
 		open()
 	else
 		fetch(package_name(dep), function(res)
-			if res and res.latest then
+			if res and res.versions and #res.versions > 0 then
+				local c = version.classify(dep.requirement, res.versions)
+				dep.status = c.status
+				dep.latest = c.latest
+				dep.suggested = dep.suggested or c.suggested
+			elseif res and res.latest then
 				dep.latest = res.latest
 			end
 			open()
