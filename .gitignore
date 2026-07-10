@@ -12,3 +12,6 @@ docs/superpowers/
 AGENTS.md
 CLAUDE.md
 .mcp.json
+
+# Raven guided-merge scratch artifacts
+.raven/merge/

@@ -18,23 +18,37 @@ format:
 fmt-check:
     stylua --check .
 
-# Run the standard local verification set
-check: fmt-check lint test test-nvim
+# Fast static checks for the pre-commit hook (no tests)
+check-fast: fmt-check lint
+
+# Run the standard local verification set (also runs in the pre-push hook)
+check: check-fast test test-nvim
 
 # List open issues with hierarchy and priority
 list-open:
     ./scripts/list_open_issues.py
 
-# Install a pre-commit git hook that runs 'just check'
+# Install pre-commit (fast checks) and pre-push (full check) git hooks
 install-hooks:
     #!/usr/bin/env sh
-    if [ -f .git/hooks/pre-commit ]; then
-        echo "A pre-commit hook already exists at .git/hooks/pre-commit."
-        echo "To use RAVEN's check, add this line to it:"
-        printf "  just check\n"
-    else
-        mkdir -p .git/hooks
-        printf '#!/bin/sh\njust check\n' > .git/hooks/pre-commit
-        chmod +x .git/hooks/pre-commit
-        echo "Installed .git/hooks/pre-commit to run 'just check' before each commit."
-    fi
+    # Resolve Git's effective hooks dir (honors core.hooksPath and linked
+    # worktrees) so hooks land where Git will run them, not a hard-coded
+    # .git/hooks that a custom hooksPath would ignore.
+    hooks_dir=$(git rev-parse --git-path hooks) || exit 1
+    install_hook() {
+        name="$1"
+        cmd="$2"
+        path="$hooks_dir/$name"
+        if [ -f "$path" ]; then
+            echo "A $name hook already exists at $path."
+            echo "To use RAVEN's gate, add this line to it:"
+            printf "  %s\n" "$cmd"
+        else
+            mkdir -p "$hooks_dir"
+            printf '#!/bin/sh\n%s\n' "$cmd" > "$path"
+            chmod +x "$path"
+            echo "Installed $path to run '$cmd'."
+        fi
+    }
+    install_hook pre-commit "just check-fast"
+    install_hook pre-push "just check"
