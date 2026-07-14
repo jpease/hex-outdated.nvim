@@ -187,8 +187,11 @@ end
 --- Does parsed version `v` satisfy parsed requirement `req`?
 function M.satisfies(req, v)
 	-- Hex matches requirements with allow_pre: false. A prerelease candidate is
-	-- therefore eligible only when the requirement operand is itself a prerelease.
-	if v.pre and not req.version.pre then
+	-- therefore eligible only when the requirement operand is itself a prerelease,
+	-- except for the upper-bound/inequality operators (<, <=, !=): a prerelease
+	-- below a stable bound legitimately satisfies those, so let them fall through
+	-- to the normal M.compare-based logic below instead of blocking early.
+	if v.pre and not req.version.pre and req.op ~= "<" and req.op ~= "<=" and req.op ~= "!=" then
 		return false
 	end
 	local c = M.compare(v, req.version)

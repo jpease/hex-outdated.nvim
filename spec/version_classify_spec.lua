@@ -94,6 +94,19 @@ describe("version.classify", function()
 		local r = version.classify("== 1.2.3.4", { "1.2.3" })
 		assert.are.equal("unknown", r.status)
 	end)
+
+	it(
+		"treats a prerelease as up_to_date against a < requirement when it's the only published version",
+		function()
+			-- Only published version is 1.2.3-alpha, no stable releases exist, so the pool
+			-- falls back to all parsed versions. 1.2.3-alpha satisfies "< 1.2.3" (upper-bound
+			-- operators admit prereleases below the stable bound), and it's also the latest
+			-- in the pool, so it is up_to_date rather than invalid.
+			local r = version.classify("< 1.2.3", { "1.2.3-alpha" })
+			assert.are.equal("up_to_date", r.status)
+			assert.are.equal("1.2.3-alpha", r.latest)
+		end
+	)
 end)
 
 describe("version.classify memoization", function()

@@ -121,4 +121,31 @@ describe("version.satisfies", function()
 		assert.is_true(version.satisfies(req("== 1.2.3"), p("1.2.3")))
 		assert.is_false(version.satisfies(req("1.2.3"), p("1.2.4")))
 	end)
+
+	it("allows a prerelease below a stable upper bound with <", function()
+		assert.is_true(version.satisfies(req("< 1.2.3"), p("1.2.3-alpha")))
+	end)
+
+	it("allows a prerelease below a stable upper bound with <=", function()
+		assert.is_true(version.satisfies(req("<= 1.2.3"), p("1.2.3-alpha")))
+	end)
+
+	it("allows a prerelease not equal to a stable operand with !=", function()
+		assert.is_true(version.satisfies(req("!= 1.2.3"), p("1.2.3-alpha")))
+	end)
+
+	it("still excludes a prerelease against a stable operand with >= (lower bound)", function()
+		assert.is_false(version.satisfies(req(">= 1.2.3"), p("1.2.3-alpha")))
+	end)
+
+	it(
+		"still excludes a prerelease against a stable operand with > even when numerically above",
+		function()
+			assert.is_false(version.satisfies(req("> 1.0.0"), p("1.2.3-alpha")))
+		end
+	)
+
+	it("still excludes a prerelease against a stable operand with ==", function()
+		assert.is_false(version.satisfies(req("== 1.2.3"), p("1.2.3-alpha")))
+	end)
 end)
