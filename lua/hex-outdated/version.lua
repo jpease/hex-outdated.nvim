@@ -212,7 +212,19 @@ function M.satisfies(req, v)
 		if c < 0 then
 			return false
 		end
-		return M.compare(v, tilde_upper(req.version)) < 0
+		local upper = tilde_upper(req.version)
+		if
+			v.pre
+			and v.major == upper.major
+			and v.minor == upper.minor
+			and v.patch == upper.patch
+		then
+			-- v is a prerelease of the exclusive upper bound itself, not a version
+			-- strictly below it (M.compare would otherwise rank it as < upper since a
+			-- prerelease always sorts below the release of the same major.minor.patch).
+			return false
+		end
+		return M.compare(v, upper) < 0
 	end
 	return false
 end

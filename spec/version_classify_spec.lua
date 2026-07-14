@@ -107,6 +107,17 @@ describe("version.classify", function()
 			assert.are.equal("1.2.3-alpha", r.latest)
 		end
 	)
+
+	it("does not treat a prerelease of the ~> upper bound itself as satisfying", function()
+		-- req.version has a pre ("rc"), so the pool is all parsed versions (no stable
+		-- fallback needed here since there are no stables anyway). 3.0.0-rc.1 is the
+		-- only candidate and becomes `latest`, but it must NOT satisfy "~> 2.0-rc"
+		-- since it's a prerelease of the exclusive upper bound (3.0.0), not a version
+		-- strictly below it. With no satisfying candidate, status is "invalid".
+		local r = version.classify("~> 2.0-rc", { "3.0.0-rc.1" })
+		assert.are.equal("invalid", r.status)
+		assert.are.equal("3.0.0-rc.1", r.latest)
+	end)
 end)
 
 describe("version.classify memoization", function()

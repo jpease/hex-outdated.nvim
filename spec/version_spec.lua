@@ -148,4 +148,26 @@ describe("version.satisfies", function()
 	it("still excludes a prerelease against a stable operand with ==", function()
 		assert.is_false(version.satisfies(req("== 1.2.3"), p("1.2.3-alpha")))
 	end)
+
+	it("excludes a prerelease of the ~> exclusive upper bound itself", function()
+		-- tilde_upper("2.0-rc") is the plain release 3.0.0; a prerelease *of* that
+		-- bound (3.0.0-rc.1) must not satisfy, even though req.version has a pre.
+		assert.is_false(version.satisfies(req("~> 2.0-rc"), p("3.0.0-rc.1")))
+	end)
+
+	it("still allows a prerelease strictly below the ~> upper bound", function()
+		assert.is_true(version.satisfies(req("~> 2.0-rc"), p("2.1.0-rc.1")))
+	end)
+
+	it("still allows a prerelease of the requirement's own major.minor.patch for ~>", function()
+		assert.is_true(version.satisfies(req("~> 2.0-rc"), p("2.0.0-rc.2")))
+	end)
+
+	it("leaves >= unaffected by the ~> upper-bound-prerelease fix", function()
+		assert.is_true(version.satisfies(req(">= 2.0.0-rc"), p("3.0.0-rc.1")))
+	end)
+
+	it("still allows a prerelease strictly below a three-component ~> upper bound", function()
+		assert.is_true(version.satisfies(req("~> 2.0.0-rc"), p("2.0.1-rc.1")))
+	end)
 end)
