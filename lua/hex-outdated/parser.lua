@@ -40,22 +40,55 @@ local function configured_dep_function(lines)
 	return "deps"
 end
 
-local function function_start(line, name)
-	local indent, rest = line:match("^(%s*)defp?%s+(.*)")
-	if not rest then
-		return
+-- Stateful multi-line function-head matcher for `name`. Feed it each source
+-- line (comment-stripped) in call order; each call returns either nil (no
+-- decision — not a `name` head, or a multi-line signature still awaiting its
+-- closing paren) or `indent, one_line` once a zero-arity `name` head is
+-- confirmed. A signature with any non-whitespace between its parens (nonzero
+-- arity, e.g. `deps/1`) resolves to nil once its closing paren is found —
+-- never a match. Must be constructed once per top-level scan (one instance
+-- per `parse_lines` call, one per `returned_variable` call) so `pending`
+-- persists correctly across the lines of a wrapped signature.
+local function new_head_matcher(name)
+	local pending -- { indent = ..., parts = { accumulated pre-")" text } }
+	return function(line)
+		if pending then
+			local before, after = line:match("^(.-)%)(.*)$")
+			if not before then
+				pending.parts[#pending.parts + 1] = line
+				return nil
+			end
+			pending.parts[#pending.parts + 1] = before
+			local params = table.concat(pending.parts)
+			local indent = pending.indent
+			pending = nil
+			if params:match("%S") then
+				return nil
+			end
+			return indent, after:find(",%s*do%s*:") ~= nil
+		end
+		local indent, rest = line:match("^(%s*)defp?%s+(.*)")
+		if not rest then
+			return nil
+		end
+		local declared, after = rest:match("^([%w_!?]+)(.*)")
+		if declared ~= name then
+			return nil
+		end
+		local paren_rest = after:match("^%s*%((.*)$")
+		if not paren_rest then
+			return indent, line:find(",%s*do%s*:") ~= nil
+		end
+		local before, tail = paren_rest:match("^(.-)%)(.*)$")
+		if not before then
+			pending = { indent = indent, parts = { paren_rest } }
+			return nil
+		end
+		if before:match("%S") then
+			return nil
+		end
+		return indent, tail:find(",%s*do%s*:") ~= nil
 	end
-	local declared, after = rest:match("^([%w_!?]+)(.*)")
-	if declared ~= name then
-		return
-	end
-	-- Resolve arity: a parameter list with content means arity > 0, so skip it
-	-- (deps/1 and other overloads). An empty list `deps()` is still arity 0.
-	local params = after:match("^%s*%((.-)%)")
-	if params and params:match("%S") then
-		return
-	end
-	return indent, line:find(",%s*do%s*:") ~= nil
 end
 
 local function package_alias(text)
@@ -71,10 +104,11 @@ local function returned_variable(lines, dep_function)
 	local active = false
 	local function_indent
 	local last_expr
+	local match_head = new_head_matcher(dep_function)
 	for _, line in ipairs(lines) do
 		local code = strip_comment(line)
 		if not active then
-			local indent, one_line = function_start(code, dep_function)
+			local indent, one_line = match_head(code)
 			if indent ~= nil and not one_line then
 				active, function_indent, last_expr = true, indent, nil
 			end
@@ -192,10 +226,11 @@ function M.parse_lines(lines)
 	local one_line = false
 	local brackets
 	local pending
+	local match_head = new_head_matcher(dep_function)
 	for i, line in ipairs(lines) do
 		local code = strip_comment(line)
 		if not active then
-			function_indent, one_line = function_start(code, dep_function)
+			function_indent, one_line = match_head(code)
 			active = function_indent ~= nil
 			if active then
 				brackets = new_bracket_state(returned_var)

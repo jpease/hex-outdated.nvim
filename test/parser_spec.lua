@@ -103,6 +103,33 @@ describe("parser fallback", function()
 		eq("jason", deps[1].name)
 		eq("~> 1.0", deps[1].requirement)
 	end)
+
+	it("selects deps/0 when a multi-line deps/1 appears first (issue #51)", function()
+		local deps = parser.parse_lines({
+			"defp deps(",
+			"  env",
+			") do",
+			'  [{:wrong, "~> 1.0"}]',
+			"end",
+			"",
+			"defp deps do",
+			'  [{:correct, "~> 2.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("correct", deps[1].name)
+	end)
+
+	it("treats a multi-line empty deps() head as arity 0 (issue #51)", function()
+		local deps = parser.parse_lines({
+			"defp deps(",
+			") do",
+			'  [{:only_dep, "~> 1.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("only_dep", deps[1].name)
+	end)
 end)
 
 local MIX = {
@@ -409,6 +436,32 @@ describe("parser parity: treesitter vs fallback", function()
 				"      {:a_very_long_package_name_here,",
 				'       "~> 2.3", only: [:dev, :test], runtime: false}',
 				"    ]",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "deps/0 selected over a multi-line deps/1 (issue #51)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps(",
+				"    env",
+				"  ) do",
+				'    [{:wrong, "~> 1.0"}]',
+				"  end",
+				"  defp deps do",
+				'    [{:correct, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "multi-line empty deps() head treated as arity 0 (issue #51)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps(",
+				"  ) do",
+				'    [{:only_dep, "~> 1.0"}]',
 				"  end",
 				"end",
 			},

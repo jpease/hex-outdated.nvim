@@ -141,6 +141,35 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal("jason", deps[1].name)
 		assert.are.equal("~> 1.0", deps[1].requirement)
 	end)
+
+	it("selects deps/0 when a multi-line deps/1 appears first (issue #51)", function()
+		local deps = parser.parse_lines({
+			"defp deps(",
+			"  env",
+			") do",
+			'  [{:wrong, "~> 1.0"}]',
+			"end",
+			"",
+			"defp deps do",
+			'  [{:correct, "~> 2.0"}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("correct", deps[1].name)
+	end)
+
+	it("treats a multi-line empty deps() head as arity 0 (issue #51)", function()
+		local deps = parser.parse_lines({
+			"defp deps(",
+			") do",
+			'  [{:only_dep, "~> 1.0"}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("only_dep", deps[1].name)
+	end)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()
