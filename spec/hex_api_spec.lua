@@ -554,3 +554,119 @@ describe("api.get_package max_concurrent clamping", function()
 		assert.are.equal(0, #warnings)
 	end)
 end)
+
+-- get_package's own clamp is a silent defensive fallback (issue #49), mirroring
+-- the max_concurrent precedent above: config.setup already warns once for an
+-- invalid cache.ttl_seconds/error_ttl_seconds, so get_package must not also warn
+-- and, more importantly, must not let a bad value reach `fresh`'s `age < ttl`
+-- numeric comparison and raise.
+describe("api.get_package TTL clamping (issue #49)", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+	local warnings
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		warnings = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return { releases = { { version = "1.0.0" } }, latest_stable_version = "1.0.0" }
+				end,
+			},
+			notify = function(msg, _level)
+				warnings[#warnings + 1] = msg
+			end,
+			log = { levels = { WARN = 2 } },
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	local function complete_last()
+		exits[#exits]({ code = 0, stdout = "body\n200" })
+	end
+
+	it("does not crash for a non-number ttl_seconds and still delivers a result", function()
+		local result
+		api.get_package("a", { ttl_seconds = "3600" }, function(r)
+			result = r
+		end)
+		complete_last()
+
+		assert.is_truthy(result)
+		assert.are.same({ "1.0.0" }, result.versions)
+	end)
+
+	it("reads second cached lookup without raising for invalid ttl_seconds (#49 repro)", function()
+		-- First call spawns and completes, populating the cache.
+		local first
+		api.get_package("jason", { ttl_seconds = "3600" }, function(r)
+			first = r
+		end)
+		complete_last()
+		assert.is_truthy(first)
+
+		-- Second call must read from the now-populated cache. Pre-fix, `fresh`
+		-- compared `age < ttl` with ttl == "3600" (a string), raising
+		-- "attempt to compare number with string".
+		local second
+		assert.has_no.errors(function()
+			api.get_package("jason", { ttl_seconds = "3600" }, function(r)
+				second = r
+			end)
+		end)
+
+		assert.are.equal(1, system_calls) -- served from cache, not re-spawned
+		assert.is_truthy(second)
+		assert.are.same({ "1.0.0" }, second.versions)
+	end)
+
+	it("does not crash a cached-failure lookup when error_ttl_seconds is invalid", function()
+		_G.vim.json.decode = function()
+			return {}
+		end
+
+		api.get_package("jason", { error_ttl_seconds = -1 }, function() end)
+		exits[#exits]({ code = 0, stdout = "{}\n503" }) -- completes with an error result
+
+		-- A negative error_ttl_seconds is clamped to the default (0), so the
+		-- cached failure is never "fresh" and a second lookup re-spawns rather
+		-- than serving from cache; the key assertion is that `fresh`'s numeric
+		-- comparison doesn't raise when handed the invalid value.
+		local second
+		assert.has_no.errors(function()
+			api.get_package("jason", { error_ttl_seconds = -1 }, function(r)
+				second = r
+			end)
+		end)
+		exits[#exits]({ code = 0, stdout = "{}\n503" })
+
+		assert.is_truthy(second)
+		assert.is_truthy(second.error)
+	end)
+
+	it("does not emit a warning from get_package itself for an invalid TTL", function()
+		api.get_package("a", { ttl_seconds = "3600", error_ttl_seconds = 0 / 0 }, function() end)
+		complete_last()
+
+		assert.are.equal(0, #warnings)
+	end)
+end)

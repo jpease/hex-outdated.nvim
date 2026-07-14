@@ -70,6 +70,73 @@ describe("config api.max_concurrent validation (issue #35)", function()
 	end)
 end)
 
+describe("config cache TTL validation (issue #49)", function()
+	local old_vim
+	local warnings
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		warnings = {}
+		_G.vim = {
+			notify = function(msg, _level)
+				warnings[#warnings + 1] = msg
+			end,
+			log = { levels = { WARN = 2 } },
+		}
+	end)
+
+	after_each(function()
+		_G.vim = old_vim
+		config.setup({}) -- reset to defaults for subsequent describe blocks
+	end)
+
+	it("warns exactly once and falls back to 3600 for an invalid ttl_seconds", function()
+		config.setup({ cache = { ttl_seconds = "3600" } })
+
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("ttl_seconds"))
+		assert.are.equal(3600, config.options.cache.ttl_seconds)
+	end)
+
+	it("warns once and falls back to 60 for a negative error_ttl_seconds", function()
+		config.setup({ cache = { error_ttl_seconds = -1 } })
+
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("error_ttl_seconds"))
+		assert.are.equal(60, config.options.cache.error_ttl_seconds)
+	end)
+
+	it("warns and falls back to 60 for a NaN error_ttl_seconds", function()
+		config.setup({ cache = { error_ttl_seconds = 0 / 0 } })
+
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("error_ttl_seconds"))
+		assert.are.equal(60, config.options.cache.error_ttl_seconds)
+	end)
+
+	it("does not warn for a valid ttl_seconds of 0", function()
+		config.setup({ cache = { ttl_seconds = 0 } })
+
+		assert.are.equal(0, #warnings)
+		assert.are.equal(0, config.options.cache.ttl_seconds)
+	end)
+
+	it("does not warn for a valid fractional ttl_seconds", function()
+		config.setup({ cache = { ttl_seconds = 1.5 } })
+
+		assert.are.equal(0, #warnings)
+		assert.are.equal(1.5, config.options.cache.ttl_seconds)
+	end)
+
+	it("does not re-warn on a later valid setup call", function()
+		config.setup({ cache = { ttl_seconds = "3600" } })
+		config.setup({ cache = { ttl_seconds = 120 } })
+
+		assert.are.equal(1, #warnings)
+		assert.are.equal(120, config.options.cache.ttl_seconds)
+	end)
+end)
+
 describe("config lock defaults", function()
 	it("exposes lock, hover_key, and lens text/highlight defaults", function()
 		config.setup({})

@@ -60,9 +60,27 @@ local function validate_max_concurrent(o)
 	end
 end
 
+local function validate_cache_ttl(o, key, default)
+	local v = o.cache[key]
+	if type(v) ~= "number" or v ~= v or v == math.huge or v == -math.huge or v < 0 then
+		vim.notify(
+			string.format(
+				"hex-outdated: cache.%s must be a non-negative number (got %s); using %s",
+				key,
+				tostring(v),
+				tostring(default)
+			),
+			vim.log.levels.WARN
+		)
+		o.cache[key] = default
+	end
+end
+
 function M.setup(opts)
 	M.options = util.deep_merge(M.defaults, opts or {})
 	validate_max_concurrent(M.options)
+	validate_cache_ttl(M.options, "ttl_seconds", M.defaults.cache.ttl_seconds)
+	validate_cache_ttl(M.options, "error_ttl_seconds", M.defaults.cache.error_ttl_seconds)
 end
 
 return M

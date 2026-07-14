@@ -16,6 +16,21 @@ local function cache_key(name, base_url)
 	return (base_url or "https://hex.pm/api") .. "|" .. name
 end
 
+-- Defensive normalization for caller-supplied TTLs: config.setup already
+-- warns once for an invalid cache.ttl_seconds/error_ttl_seconds at startup,
+-- but get_package must not let a bad value reach `fresh`'s numeric comparison
+-- regardless of caller (tests, other integrations, or config.setup being
+-- bypassed entirely) — mirrors the existing max_concurrent clamp below.
+local function safe_ttl(v, default)
+	if v == nil then
+		return default
+	end
+	if type(v) ~= "number" or v ~= v or v == math.huge or v == -math.huge or v < 0 then
+		return default
+	end
+	return v
+end
+
 -- Concurrency state. `max_concurrent` bounds simultaneously running curl
 -- processes: a mix.exs with many deps would otherwise spawn one process per dep
 -- at once, which is heavy and amplifies a retry storm against a failing upstream.
@@ -203,8 +218,8 @@ end
 function M.get_package(name, opts, callback)
 	opts = opts or {}
 	local key = cache_key(name, opts.base_url)
-	local ttl = opts.ttl_seconds or 3600
-	local error_ttl = opts.error_ttl_seconds or 0
+	local ttl = safe_ttl(opts.ttl_seconds, 3600)
+	local error_ttl = safe_ttl(opts.error_ttl_seconds, 0)
 	if opts.max_concurrent ~= nil then
 		-- Config-level validation (config.setup) already warns once for invalid
 		-- values; this is a silent defensive clamp for callers that bypass it.
