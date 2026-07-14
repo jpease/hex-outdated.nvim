@@ -142,8 +142,9 @@ describe("repeated setup does not duplicate autocmds", function()
 end)
 
 local function has_keymap(bufnr, lhs)
+	local normalized = vim.api.nvim_replace_termcodes(lhs, true, true, true)
 	for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
-		if m.lhs == lhs then
+		if m.lhs == normalized then
 			return true
 		end
 	end
@@ -176,8 +177,9 @@ describe("repeated setup removes stale keymaps (issue #28)", function()
 	end)
 
 	local function keymap_desc(bufnr, lhs)
+		local normalized = vim.api.nvim_replace_termcodes(lhs, true, true, true)
 		for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
-			if m.lhs == lhs then
+			if m.lhs == normalized then
 				return m.desc
 			end
 		end
@@ -198,5 +200,43 @@ describe("repeated setup removes stale keymaps (issue #28)", function()
 		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
 		truthy(has_keymap(buf, "gU"), "user mapping on gU preserved")
 		eq("user mapping", keymap_desc(buf, "gU"), "user mapping not overwritten or deleted")
+	end)
+
+	it("removes a <leader>-based keymap action that is later cleared (issue #53)", function()
+		local old_mapleader = vim.g.mapleader
+		vim.g.mapleader = " "
+
+		hex.setup({ enabled = false, keymaps = { upgrade = "<leader>u" } })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		truthy(has_keymap(buf, "<leader>u"), "<leader>u mapped after first setup")
+
+		hex.setup({ enabled = false, keymaps = {} })
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		eq(false, has_keymap(buf, "<leader>u"), "<leader>u removed after keymaps cleared")
+
+		vim.g.mapleader = old_mapleader
+	end)
+
+	it("does not delete a user mapping that replaced a plugin leader mapping (#53)", function()
+		local old_mapleader = vim.g.mapleader
+		vim.g.mapleader = " "
+
+		hex.setup({ enabled = false, keymaps = { upgrade = "<leader>u" } })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		truthy(has_keymap(buf, "<leader>u"), "<leader>u mapped after first setup")
+
+		-- The user re-binds the same lhs to their own action after setup.
+		vim.keymap.set("n", "<leader>u", "<Nop>", { buffer = buf, desc = "user mapping" })
+
+		hex.setup({ enabled = false, keymaps = {} })
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		truthy(has_keymap(buf, "<leader>u"), "user mapping on <leader>u preserved")
+		eq("user mapping", keymap_desc(buf, "<leader>u"), "user mapping not overwritten or deleted")
+
+		vim.g.mapleader = old_mapleader
 	end)
 end)

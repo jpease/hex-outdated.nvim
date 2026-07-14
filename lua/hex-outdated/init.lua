@@ -84,8 +84,9 @@ local buf_keymaps = {}
 local KEYMAP_OWNER = "^hex%-outdated:"
 
 local function plugin_owns_mapping(bufnr, lhs)
+	local normalized = vim.api.nvim_replace_termcodes(lhs, true, true, true)
 	for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
-		if m.lhs == lhs then
+		if m.lhs == normalized then
 			return type(m.desc) == "string" and m.desc:match(KEYMAP_OWNER) ~= nil
 		end
 	end
