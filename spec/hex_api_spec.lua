@@ -345,6 +345,23 @@ describe("api.get_package in-flight coalescing", function()
 		assert.is_true(res.stale)
 		assert.are.same({ "1.4.4" }, res.versions) -- but the good data survives
 	end)
+
+	it("does not reuse stale versions for a definitive 404 (issue #48)", function()
+		api.get_package("jason", { ttl_seconds = 3600 }, function() end)
+		complete_last() -- success: caches versions { "1.4.4" }
+
+		local res
+		api.get_package("jason", { ttl_seconds = 3600, force = true }, function(r)
+			res = r
+		end)
+		exits[#exits]({ code = 0, stdout = "{}\n404" }) -- refetch: package removed
+
+		assert.is_truthy(res.error)
+		assert.is_true(res.not_found)
+		assert.is_nil(res.stale)
+		assert.is_nil(res.versions)
+		assert.is_nil(res.latest)
+	end)
 end)
 
 describe("api.get_package concurrency cap", function()

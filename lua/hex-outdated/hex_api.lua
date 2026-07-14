@@ -180,13 +180,18 @@ local function spawn(name, opts)
 			-- Errors carry no time of their own; stamp one so negative caching can age them.
 			result.time = result.time or os.time()
 			-- Serve stale-but-good data through a transient failure rather than
-			-- flipping the dep to an error indicator. The cached failure still ages
-			-- out via negative caching, so we retry once the window passes.
-			local prev = cache[key]
-			if prev and prev.versions and #prev.versions > 0 then
-				result.versions = prev.versions
-				result.latest = prev.latest
-				result.stale = true
+			-- flipping the dep to an error indicator. A definitive 404 means the
+			-- package doesn't exist (or was renamed) — never inherit stale data for
+			-- that case, only for a transient failure (network error, 5xx). The
+			-- cached failure still ages out via negative caching, so we retry once
+			-- the window passes.
+			if not result.not_found then
+				local prev = cache[key]
+				if prev and prev.versions and #prev.versions > 0 then
+					result.versions = prev.versions
+					result.latest = prev.latest
+					result.stale = true
+				end
 			end
 		end
 		cache[key] = result
