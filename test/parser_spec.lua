@@ -334,6 +334,30 @@ describe("parser (treesitter)", function()
 		eq("jason", result[1].name)
 		eq("~> 1.0", result[1].requirement)
 	end)
+
+	it("finds deps inlined directly in project() with no deps/0 function (issue #42)", function()
+		local mix_inline_deps = {
+			"defmodule Demo.MixProject do",
+			"  use Mix.Project",
+			"  def project do",
+			"    [",
+			"      app: :demo,",
+			'      version: "0.1.0",',
+			'      deps: [{:jason, "~> 1.4"}, {:plug, "~> 1.15"}]',
+			"    ]",
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_inline_deps)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(2, #result)
+		eq("jason", result[1].name)
+		eq("~> 1.4", result[1].requirement)
+		eq("plug", result[2].name)
+		eq("~> 1.15", result[2].requirement)
+	end)
 end)
 
 -- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
@@ -505,6 +529,21 @@ describe("parser parity: treesitter vs fallback", function()
 				"  defp deps(",
 				"  ) do",
 				'    [{:only_dep, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "deps inlined directly in project() with no deps/0 function (issue #42)",
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  use Mix.Project",
+				"  def project do",
+				"    [",
+				"      app: :demo,",
+				'      version: "0.1.0",',
+				'      deps: [{:jason, "~> 1.4"}, {:plug, "~> 1.15"}]',
+				"    ]",
 				"  end",
 				"end",
 			},

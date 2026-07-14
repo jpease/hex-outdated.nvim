@@ -191,6 +191,27 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal("correct", deps[1].name)
 	end)
 
+	it("finds deps inlined directly in project() with no deps/0 function (issue #42)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  use Mix.Project",
+			"  def project do",
+			"    [",
+			"      app: :demo,",
+			'      version: "0.1.0",',
+			'      deps: [{:jason, "~> 1.4"}, {:plug, "~> 1.15"}]',
+			"    ]",
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(2, #deps)
+		assert.are.equal("jason", deps[1].name)
+		assert.are.equal("~> 1.4", deps[1].requirement)
+		assert.are.equal("plug", deps[2].name)
+		assert.are.equal("~> 1.15", deps[2].requirement)
+	end)
+
 	it("treats a multi-line empty deps() head as arity 0 (issue #51)", function()
 		local deps = parser.parse_lines({
 			"defp deps(",

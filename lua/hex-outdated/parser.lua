@@ -254,6 +254,105 @@ local function advance_brackets(state, code, to)
 	end
 end
 
+-- Fallback for a mix.exs that inlines its deps list directly in project()
+-- (no separate deps/0 function for the primary scan above to find), e.g.
+-- `def project do [app: :demo, deps: [...]] end`. Activates the moment a
+-- `deps:` keyword is directly followed by `[` (not a function call, which
+-- `configured_dep_function` already routes to the primary path above), and
+-- stays active until that list's own closing `]` — tracked with the same
+-- bracket-depth bookkeeping `advance_brackets` uses elsewhere in this file —
+-- rather than a def/defp `end`. Used only when the primary scan in
+-- `M.parse_lines` finds no deps at all.
+local function parse_inline_deps(lines)
+	local deps = {}
+	local active = false
+	local brackets
+	local pending
+	for i, line in ipairs(lines) do
+		local code = strip_comment(line)
+		local search_pos = 1
+		if not active then
+			local match_start, open_end = code:find("deps%s*:%s*%[")
+			if match_start then
+				active = true
+				brackets = new_bracket_state(nil)
+				brackets.col = open_end + 1
+				brackets.stack = { false }
+				pending = nil
+				search_pos = open_end + 1
+			end
+		else
+			brackets.col = 1
+			brackets.in_string = false
+			brackets.escaped = false
+		end
+		if active then
+			if pending then
+				local lead, content = code:match('^(%s*)"([^"]*)"')
+				if content then
+					local quote_pos = #lead + 1
+					local next_brace = code:find("{", quote_pos + #content + 2)
+					local tuple_text = code:sub(1, next_brace and (next_brace - 1) or #code)
+					deps[#deps + 1] = {
+						name = pending.name,
+						package = package_alias(tuple_text),
+						requirement = content,
+						kind = "hex",
+						row = i - 1,
+						col_start = quote_pos,
+						col_end = quote_pos + #content,
+					}
+					search_pos = quote_pos + #content + 2
+				end
+				pending = nil
+			end
+			while true do
+				local match_start, quote_pos, name = code:find(DEP_PATTERN, search_pos)
+				if not name then
+					break
+				end
+				advance_brackets(brackets, code, match_start)
+				local in_dep_list = #brackets.stack > 0 and brackets.assign == 0
+				if in_dep_list then
+					local content = code:match('([^"]*)"', quote_pos + 1)
+					if content then
+						local next_brace = code:find("{", quote_pos + #content + 2)
+						local tuple_text =
+							code:sub(match_start, next_brace and (next_brace - 1) or #code)
+						deps[#deps + 1] = {
+							name = name,
+							package = package_alias(tuple_text),
+							requirement = content,
+							kind = "hex",
+							row = i - 1,
+							col_start = quote_pos,
+							col_end = quote_pos + #content,
+						}
+						search_pos = quote_pos + #content + 2
+					else
+						search_pos = quote_pos + 1
+					end
+				else
+					search_pos = match_start + 1
+				end
+			end
+			local pending_start, _, pending_name = code:find(PENDING_DEP_PATTERN, search_pos)
+			if pending_name then
+				advance_brackets(brackets, code, pending_start)
+				local in_dep_list = #brackets.stack > 0 and brackets.assign == 0
+				if in_dep_list then
+					pending = { name = pending_name }
+				end
+			end
+			advance_brackets(brackets, code, #code + 1)
+			if #brackets.stack == 0 then
+				active = false
+			end
+		end
+	end
+	return deps
+end
+
 --- Parse dependency tuples out of a list of lines (pure; no Neovim APIs).
 --- Returns a list of dep tables with 0-indexed `row`, `col_start`, `col_end`.
 function M.parse_lines(lines)
@@ -403,6 +502,12 @@ function M.parse_lines(lines)
 			end
 		end
 	end
+	if #deps == 0 then
+		local inline = parse_inline_deps(lines)
+		if #inline > 0 then
+			return inline
+		end
+	end
 	return deps
 end
 
@@ -469,6 +574,34 @@ end
 
 local function definition_body(node)
 	return child_of_type(node, "do_block") or node
+end
+
+-- Locate the `deps:` pair's value node within a `[key: val, ...]` keyword
+-- list (e.g. project()'s returned list when it inlines `deps: [...]`
+-- directly instead of delegating to a separate deps/0 function). Verified
+-- against tree-sitter-elixir's actual grammar: a keyword list literal is a
+-- `list` node whose sole named child is a `keywords` node containing `pair`
+-- children, each with a `keyword` node (its text includes the trailing ":")
+-- and a value node.
+local function find_deps_pair_value(list_node, bufnr)
+	if type(list_node.type) ~= "function" or list_node:type() ~= "list" then
+		return nil
+	end
+	local keywords = child_of_type(list_node, "keywords")
+	if not keywords then
+		return nil
+	end
+	for i = 0, keywords:named_child_count() - 1 do
+		local pair = keywords:named_child(i)
+		if pair:type() == "pair" then
+			local key = pair:named_child(0)
+			local value = pair:named_child(1)
+			if key and value and node_text(key, bufnr):match("^deps%s*:%s*$") then
+				return value
+			end
+		end
+	end
+	return nil
 end
 
 -- The dependency list is the function's return value, i.e. the last expression
@@ -562,6 +695,16 @@ local function parse_treesitter(bufnr)
 			and vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 		or {}
 	local body = find_definition(tree:root(), bufnr, configured_dep_function(lines))
+	if not body then
+		local project_body = find_definition(tree:root(), bufnr, "project")
+		if project_body then
+			local project_list = return_expression(project_body, bufnr)
+			local deps_value = find_deps_pair_value(project_list, bufnr)
+			if deps_value and deps_value:type() == "list" then
+				body = deps_value
+			end
+		end
+	end
 	if not body then
 		return {}
 	end
