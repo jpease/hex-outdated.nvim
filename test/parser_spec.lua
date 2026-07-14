@@ -104,6 +104,36 @@ describe("parser fallback", function()
 		eq("~> 1.0", deps[1].requirement)
 	end)
 
+	it("finds the dep list after a flush-left nested block end (issue #47)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"if true do",
+			"  ignored = :ok",
+			"end",
+			'[{:jason, "~> 1.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+		eq("~> 1.0", deps[1].requirement)
+	end)
+
+	it("resumes dep-scanning after deeply nested flush-left blocks (issue #47)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"if true do",
+			"if false do",
+			"  ignored = :ok",
+			"end",
+			"end",
+			'[{:jason, "~> 1.0"}]',
+			"end",
+		})
+		eq(1, #deps)
+		eq("jason", deps[1].name)
+		eq("~> 1.0", deps[1].requirement)
+	end)
+
 	it("selects deps/0 when a multi-line deps/1 appears first (issue #51)", function()
 		local deps = parser.parse_lines({
 			"defp deps(",
@@ -436,6 +466,19 @@ describe("parser parity: treesitter vs fallback", function()
 				"      {:a_very_long_package_name_here,",
 				'       "~> 2.3", only: [:dev, :test], runtime: false}',
 				"    ]",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "dep list found after a flush-left nested block end (issue #47)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				"    if true do",
+				"      ignored = :ok",
+				"    end",
+				'    [{:jason, "~> 1.0"}]',
 				"  end",
 				"end",
 			},

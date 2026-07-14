@@ -30,6 +30,39 @@ local function strip_comment(line)
 	return line
 end
 
+-- Count block-opening keywords ("do" starting a do/end block, and "fn" for an
+-- anonymous function) in `code`, as whole words. Used to track nested-block
+-- depth so a bare "end" line only closes the dep function when it isn't
+-- closing an inner if/case/cond/unless/with/for/receive/try/fn block —
+-- Elixir's indentation is not semantically significant, so indentation alone
+-- can't tell them apart. Heuristic: doesn't mask string-literal contents, but
+-- dep requirement strings and option atoms in a real mix.exs deps list won't
+-- contain bare "do"/"fn" as whole words.
+local function count_openers(code)
+	local count = 0
+	local pos = 1
+	while true do
+		local s, e = code:find("%f[%w]do%f[%W]", pos)
+		if not s then
+			break
+		end
+		if code:sub(e + 1, e + 1) ~= ":" then
+			count = count + 1
+		end
+		pos = e + 1
+	end
+	pos = 1
+	while true do
+		local s, e = code:find("%f[%w]fn%f[%W]", pos)
+		if not s then
+			break
+		end
+		count = count + 1
+		pos = e + 1
+	end
+	return count
+end
+
 local function configured_dep_function(lines)
 	for _, line in ipairs(lines) do
 		local name = strip_comment(line):match("deps%s*:%s*([%a_][%w_!?]*)%s*%(")
@@ -102,20 +135,26 @@ end
 -- variable (e.g. a list literal or a composed `base() ++ [...]`).
 local function returned_variable(lines, dep_function)
 	local active = false
-	local function_indent
 	local last_expr
+	local block_depth
 	local match_head = new_head_matcher(dep_function)
 	for _, line in ipairs(lines) do
 		local code = strip_comment(line)
 		if not active then
 			local indent, one_line = match_head(code)
 			if indent ~= nil and not one_line then
-				active, function_indent, last_expr = true, indent, nil
+				active, last_expr, block_depth = true, nil, 0
 			end
-		elseif code:match("^" .. function_indent .. "end%s*$") then
-			return last_expr and last_expr:match("^%s*([%a_][%w_]*)%s*$") or nil
-		elseif code:match("%S") then
-			last_expr = code
+		elseif code:match("^%s*end%s*$") then
+			if block_depth == 0 then
+				return last_expr and last_expr:match("^%s*([%a_][%w_]*)%s*$") or nil
+			end
+			block_depth = block_depth - 1
+		else
+			block_depth = block_depth + count_openers(code)
+			if code:match("%S") then
+				last_expr = code
+			end
 		end
 	end
 	return nil
@@ -226,18 +265,29 @@ function M.parse_lines(lines)
 	local one_line = false
 	local brackets
 	local pending
+	local block_depth
 	local match_head = new_head_matcher(dep_function)
 	for i, line in ipairs(lines) do
 		local code = strip_comment(line)
+		local just_activated = false
 		if not active then
 			function_indent, one_line = match_head(code)
 			active = function_indent ~= nil
 			if active then
 				brackets = new_bracket_state(returned_var)
 				pending = nil
+				block_depth = 0
+				just_activated = true
 			end
-		elseif code:match("^" .. function_indent .. "end%s*$") then
-			active = false
+		elseif code:match("^%s*end%s*$") then
+			if block_depth == 0 then
+				active = false
+			else
+				block_depth = block_depth - 1
+			end
+		end
+		if active and not just_activated then
+			block_depth = block_depth + count_openers(code)
 		end
 		if active then
 			-- Per-line reset of the string scan; the bracket stack and last_sig

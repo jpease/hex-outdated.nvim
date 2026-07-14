@@ -142,6 +142,38 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal("~> 1.0", deps[1].requirement)
 	end)
 
+	it("finds the dep list after a flush-left nested block end (issue #47)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"if true do",
+			"  ignored = :ok",
+			"end",
+			'[{:jason, "~> 1.0"}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+		assert.are.equal("~> 1.0", deps[1].requirement)
+	end)
+
+	it("resumes dep-scanning after deeply nested flush-left blocks (issue #47)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"if true do",
+			"if false do",
+			"  ignored = :ok",
+			"end",
+			"end",
+			'[{:jason, "~> 1.0"}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+		assert.are.equal("~> 1.0", deps[1].requirement)
+	end)
+
 	it("selects deps/0 when a multi-line deps/1 appears first (issue #51)", function()
 		local deps = parser.parse_lines({
 			"defp deps(",
