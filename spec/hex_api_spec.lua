@@ -164,6 +164,67 @@ describe("hex_api pure helpers", function()
 				end, now)
 			)
 		end)
+
+		it("rejects a non-table releases field", function()
+			assert.are.same(
+				{ error = "invalid response" },
+				hex_api._parse_package_response({ code = 0, stdout = "{}\n200" }, function()
+					return { releases = "not a table" }
+				end, now)
+			)
+		end)
+
+		it("rejects a releases table containing non-table entries (issue #46 repro)", function()
+			-- Confirm the malformed body actually raises pre-fix, not just returns a
+			-- wrong value: `rel.version` indexes a number when `rel` is `1`.
+			assert.has_error(function()
+				local ok, data = pcall(function()
+					return { releases = { 1 } }
+				end)
+				assert.is_true(ok)
+				for _, rel in ipairs(data.releases) do
+					local _ = rel.version -- luacheck: ignore
+				end
+			end)
+
+			assert.are.same(
+				{ error = "invalid response" },
+				hex_api._parse_package_response({ code = 0, stdout = "{}\n200" }, function()
+					return { releases = { 1 } }
+				end, now)
+			)
+		end)
+
+		it("rejects a release entry whose version field is the wrong type", function()
+			assert.are.same(
+				{ error = "invalid response" },
+				hex_api._parse_package_response({ code = 0, stdout = "{}\n200" }, function()
+					return { releases = { { version = 42 } } }
+				end, now)
+			)
+		end)
+
+		it("still accepts a table release entry lacking a version key (no regression)", function()
+			-- Same body shape as "normalizes successful package JSON" above: the
+			-- `{ other = "ignored" }` entry has no `version` key at all and must
+			-- keep being silently skipped rather than treated as an error.
+			local result = hex_api._parse_package_response({
+				code = 0,
+				stdout = '{"ok":true}\n200',
+			}, function()
+				return {
+					latest_stable_version = "1.7.14",
+					releases = {
+						{ version = "1.7.14" },
+						{ other = "ignored" },
+					},
+				}
+			end, now)
+
+			assert.are.same({ "1.7.14" }, result.versions)
+			assert.are.equal("1.7.14", result.latest)
+			assert.is_nil(result.error)
+		end)
 	end)
 end)
 
@@ -329,6 +390,42 @@ describe("api.get_package concurrency cap", function()
 		exits[#exits]({ code = 0, stdout = "body\n200" }) -- "a" finishes
 
 		assert.are.equal(2, system_calls) -- the queue drains and "b" starts
+	end)
+
+	it("drains the queue after a malformed response ahead of it completes (#46)", function()
+		-- Unlike the other tests in this block, this one needs the stubbed
+		-- decode to actually reflect the malformed body it's fed, rather than
+		-- always returning `{ releases = {} }`.
+		_G.vim.json.decode = function(body)
+			if body:match("releases") then
+				return { releases = { 1 } }
+			end
+			return { releases = {} }
+		end
+
+		local result_a
+		local result_b
+		api.get_package("a", { max_concurrent = 1 }, function(r)
+			result_a = r
+		end)
+		api.get_package("b", { max_concurrent = 1 }, function(r)
+			result_b = r
+		end)
+
+		assert.are.equal(1, system_calls) -- "b" is queued behind "a"
+
+		-- "a"'s response decodes fine at the top level but has a malformed
+		-- nested releases entry (a number instead of a release table). Pre-fix,
+		-- this raises inside the vim.system completion callback, `deliver()`
+		-- never runs, and "b" stalls in the queue forever.
+		exits[#exits]({ code = 0, stdout = '{"releases":[1]}\n200' })
+
+		assert.are.equal(2, system_calls) -- the queue still drains and "b" starts
+		assert.is_truthy(result_a) -- "a"'s own callback still received a result
+		assert.is_truthy(result_a.error) -- ...specifically an error, not a raised exception
+
+		exits[#exits]({ code = 0, stdout = "body\n200" }) -- "b" finishes
+		assert.is_truthy(result_b)
 	end)
 end)
 

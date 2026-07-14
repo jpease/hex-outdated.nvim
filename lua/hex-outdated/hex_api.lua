@@ -127,11 +127,20 @@ local function parse_package_response(obj, decode_json, now)
 	if not ok or type(data) ~= "table" then
 		return { error = "invalid response" }
 	end
+	if data.releases ~= nil and type(data.releases) ~= "table" then
+		return { error = "invalid response" }
+	end
 	local retirements = type(data.retirements) == "table" and data.retirements or {}
 	local versions = {}
 	local active = {}
 	local saw_release = false
 	for _, rel in ipairs(data.releases or {}) do
+		if type(rel) ~= "table" then
+			return { error = "invalid response" }
+		end
+		if rel.version ~= nil and type(rel.version) ~= "string" then
+			return { error = "invalid response" }
+		end
 		if rel.version then
 			saw_release = true
 			if retirements[rel.version] == nil then
@@ -197,7 +206,8 @@ local function spawn(name, opts)
 	-- the package stays "loading" forever and future fetches ride a request that
 	-- never resolves.
 	local ok, err = pcall(vim.system, cmd, { text = true }, function(obj)
-		deliver(parse_package_response(obj, vim.json.decode, os.time))
+		local parse_ok, result = pcall(parse_package_response, obj, vim.json.decode, os.time)
+		deliver(parse_ok and result or { error = "invalid response" })
 	end)
 	if not ok then
 		deliver({ error = "could not run curl: " .. tostring(err) })
