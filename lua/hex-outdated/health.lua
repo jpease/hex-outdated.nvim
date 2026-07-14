@@ -16,11 +16,12 @@ end
 M._reachability_verdict = reachability_verdict
 
 local function probe_command(base, timeout_ms)
+	local null = (vim.fn.has("win32") == 1) and "NUL" or "/dev/null"
 	return {
 		"curl",
 		"-sS",
 		"-o",
-		"/dev/null",
+		null,
 		"--max-time",
 		string.format("%.15g", util.timeout_seconds(timeout_ms, 5000)),
 		base,

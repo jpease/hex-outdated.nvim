@@ -15,17 +15,61 @@ describe("health._reachability_verdict", function()
 end)
 
 describe("health._probe_command", function()
-	it("preserves fractional timeout seconds", function()
+	local old_vim
+
+	after_each(function()
+		_G.vim = old_vim
+	end)
+
+	it("preserves fractional timeout seconds on non-Windows", function()
+		old_vim = rawget(_G, "vim")
+		_G.vim = { fn = {
+			has = function()
+				return 0
+			end,
+		} }
 		assert.are.same(
 			{ "curl", "-sS", "-o", "/dev/null", "--max-time", "1.999", "https://example.test" },
 			health._probe_command("https://example.test", 1999)
 		)
 	end)
 
-	it("falls back to five seconds for invalid timeout values", function()
+	it("falls back to five seconds for invalid timeout values on non-Windows", function()
+		old_vim = rawget(_G, "vim")
+		_G.vim = { fn = {
+			has = function()
+				return 0
+			end,
+		} }
 		assert.are.same(
 			{ "curl", "-sS", "-o", "/dev/null", "--max-time", "5", "https://example.test" },
 			health._probe_command("https://example.test", 0)
+		)
+	end)
+
+	it("uses NUL device on Windows", function()
+		old_vim = rawget(_G, "vim")
+		_G.vim = { fn = {
+			has = function()
+				return 1
+			end,
+		} }
+		assert.are.same(
+			{ "curl", "-sS", "-o", "NUL", "--max-time", "1.999", "https://example.test" },
+			health._probe_command("https://example.test", 1999)
+		)
+	end)
+
+	it("uses /dev/null device on non-Windows", function()
+		old_vim = rawget(_G, "vim")
+		_G.vim = { fn = {
+			has = function()
+				return 0
+			end,
+		} }
+		assert.are.same(
+			{ "curl", "-sS", "-o", "/dev/null", "--max-time", "1.999", "https://example.test" },
+			health._probe_command("https://example.test", 1999)
 		)
 	end)
 end)
