@@ -240,3 +240,79 @@ describe("repeated setup removes stale keymaps (issue #28)", function()
 		vim.g.mapleader = old_mapleader
 	end)
 end)
+
+describe("auto_update debounce (issue #52)", function()
+	local function with_stubbed_analyze(fn)
+		local original_analyze = core.analyze
+		local analyze_calls = 0
+		core.analyze = function(...)
+			analyze_calls = analyze_calls + 1
+			return original_analyze(...)
+		end
+		local ok, err = pcall(fn, function()
+			return analyze_calls
+		end)
+		core.analyze = original_analyze
+		if not ok then
+			error(err)
+		end
+	end
+
+	it("does not fire a stale timer left over from a previous attach (issue #52)", function()
+		with_stubbed_analyze(function(get_calls)
+			hex.setup({ enabled = false, auto_update = true, debounce_ms = 30 })
+			local buf = vim.api.nvim_create_buf(true, false)
+			vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+			vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+			-- Starts a debounce timer under the OLD attach()'s closure.
+			vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
+
+			-- Reconfigure with auto_update disabled before the old timer fires,
+			-- then reattach the same buffer under the new config.
+			hex.setup({ enabled = false, auto_update = false })
+			vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+			-- Wait comfortably past the original debounce window.
+			vim.wait(150)
+
+			eq(0, get_calls(), "stale timer from previous attach must not call core.analyze")
+
+			vim.api.nvim_buf_delete(buf, { force = true })
+		end)
+	end)
+
+	it("still analyzes normally when auto_update is left enabled", function()
+		with_stubbed_analyze(function(get_calls)
+			hex.setup({ enabled = false, auto_update = true, debounce_ms = 30 })
+			local buf = vim.api.nvim_create_buf(true, false)
+			vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+			vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+			vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
+
+			vim.wait(150)
+
+			eq(1, get_calls(), "debounced timer should call core.analyze exactly once")
+
+			vim.api.nvim_buf_delete(buf, { force = true })
+		end)
+	end)
+
+	it("cancels the pending timer when the buffer is deleted", function()
+		with_stubbed_analyze(function(get_calls)
+			hex.setup({ enabled = false, auto_update = true, debounce_ms = 30 })
+			local buf = vim.api.nvim_create_buf(true, false)
+			vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+			vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+			vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
+
+			vim.api.nvim_buf_delete(buf, { force = true })
+
+			vim.wait(150)
+
+			eq(0, get_calls(), "deleted buffer's pending timer must not call core.analyze")
+		end)
+	end)
+end)

@@ -102,12 +102,28 @@ local function clear_buf_keymaps(bufnr)
 	buf_keymaps[bufnr] = nil
 end
 
+-- Plugin-owned per-buffer auto-update debounce timer, tracked across attach()
+-- calls the same way buf_keymaps is: clearing the per-buffer augroup only
+-- stops FUTURE TextChanged triggers, it does not cancel a vim.defer_fn timer
+-- already in flight from a previous attach()'s closure.
+local buf_timers = {}
+
+local function stop_buf_timer(bufnr)
+	local timer = buf_timers[bufnr]
+	if timer then
+		timer:stop()
+		buf_timers[bufnr] = nil
+	end
+end
+
 local function attach(bufnr)
 	if not is_mixexs(bufnr) then
 		return
 	end
 	-- Remove keymaps installed by a previous setup() call before adding new ones.
 	clear_buf_keymaps(bufnr)
+	-- Cancel any timer left over from a previous attach() of this buffer.
+	stop_buf_timer(bufnr)
 	local installed = {}
 	buf_keymaps[bufnr] = installed
 
@@ -124,6 +140,7 @@ local function attach(bufnr)
 		callback = function()
 			core.state[bufnr] = nil
 			buf_keymaps[bufnr] = nil
+			stop_buf_timer(bufnr)
 		end,
 	})
 	for action, lhs in pairs(config.options.keymaps or {}) do
@@ -141,15 +158,13 @@ local function attach(bufnr)
 		core.analyze(bufnr)
 	end
 	if config.options.auto_update then
-		local timer
 		vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "InsertLeave" }, {
 			group = buf_group,
 			buffer = bufnr,
 			callback = function()
-				if timer then
-					timer:stop()
-				end
-				timer = vim.defer_fn(function()
+				stop_buf_timer(bufnr)
+				buf_timers[bufnr] = vim.defer_fn(function()
+					buf_timers[bufnr] = nil
 					if vim.api.nvim_buf_is_valid(bufnr) then
 						core.analyze(bufnr)
 					end
