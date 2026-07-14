@@ -399,6 +399,20 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			desc = "dep requirement string wrapped to the next line (issue #41)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				"    [",
+				'      {:short_dep, "~> 1.0"},',
+				"      {:a_very_long_package_name_here,",
+				'       "~> 2.3", only: [:dev, :test], runtime: false}',
+				"    ]",
+				"  end",
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is

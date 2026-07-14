@@ -6,6 +6,12 @@ local M = {}
 -- immediately after the comma and are intentionally skipped here.
 local DEP_PATTERN = '{%s*:([%w_]+)%s*,%s*"'
 
+-- A dep tuple whose name+comma appear at the end of a line, with the
+-- requirement string wrapped onto the next line (e.g. `mix format`-wrapped
+-- long package names). Matched against the unconsumed tail of a line after
+-- all inline DEP_PATTERN matches on it have been exhausted.
+local PENDING_DEP_PATTERN = "{%s*:([%w_]+)%s*,%s*$"
+
 local function strip_comment(line)
 	local in_string = false
 	local escaped = false
@@ -185,6 +191,7 @@ function M.parse_lines(lines)
 	local function_indent
 	local one_line = false
 	local brackets
+	local pending
 	for i, line in ipairs(lines) do
 		local code = strip_comment(line)
 		if not active then
@@ -192,6 +199,7 @@ function M.parse_lines(lines)
 			active = function_indent ~= nil
 			if active then
 				brackets = new_bracket_state(returned_var)
+				pending = nil
 			end
 		elseif code:match("^" .. function_indent .. "end%s*$") then
 			active = false
@@ -219,6 +227,29 @@ function M.parse_lines(lines)
 			-- requirement from that specific tuple and scope the alias search to the
 			-- text between this tuple's `{` and the next one.
 			local search_pos = 1
+			-- A dep tuple opened on a previous line (name + comma, then the
+			-- requirement string wrapped to this line). If this line's leading
+			-- (possibly indented) text is a quoted string, it's that requirement;
+			-- otherwise give up on the pending tuple without emitting anything.
+			if pending then
+				local lead, content = code:match('^(%s*)"([^"]*)"')
+				if content then
+					local quote_pos = #lead + 1
+					local next_brace = code:find("{", quote_pos + #content + 2)
+					local tuple_text = code:sub(1, next_brace and (next_brace - 1) or #code)
+					deps[#deps + 1] = {
+						name = pending.name,
+						package = package_alias(tuple_text),
+						requirement = content,
+						kind = "hex",
+						row = i - 1,
+						col_start = quote_pos,
+						col_end = quote_pos + #content,
+					}
+					search_pos = quote_pos + #content + 2
+				end
+				pending = nil
+			end
 			while true do
 				local match_start, quote_pos, name = code:find(DEP_PATTERN, search_pos)
 				if not name then
@@ -251,6 +282,21 @@ function M.parse_lines(lines)
 					end
 				else
 					search_pos = match_start + 1
+				end
+			end
+			-- A dep tuple whose name+comma end the line, with its requirement string
+			-- wrapped to the next line (e.g. a long package name `mix format` wraps).
+			-- Sync the bracket state up to the match and check dep-list membership the
+			-- same way the inline-match branch above does, then remember the name so
+			-- the next line's leading quoted string can be paired with it.
+			local pending_start, _, pending_name = code:find(PENDING_DEP_PATTERN, search_pos)
+			if pending_name then
+				advance_brackets(brackets, code, pending_start)
+				local in_dep_list = #brackets.stack > 0
+					and brackets.assign == 0
+					and not in_assign_scope
+				if in_dep_list then
+					pending = { name = pending_name }
 				end
 			end
 			-- Finish scanning the line so closing brackets are accounted for before

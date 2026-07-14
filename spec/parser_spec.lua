@@ -99,6 +99,32 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal("actual_b", deps[2].package)
 	end)
 
+	it("finds a dep whose requirement string wraps to the next line (issue #41)", function()
+		local wrapped_lines = {
+			"defp deps do",
+			"  [",
+			'    {:short_dep, "~> 1.0"},',
+			"    {:a_very_long_package_name_here,",
+			'     "~> 2.3", only: [:dev, :test], runtime: false}',
+			"  ]",
+			"end",
+		}
+		local deps = parser.parse_lines(wrapped_lines)
+		assert.are.equal(2, #deps)
+
+		assert.are.equal("short_dep", deps[1].name)
+		assert.are.equal("~> 1.0", deps[1].requirement)
+		assert.are.equal(2, deps[1].row) -- 0-indexed line 3
+		local short_line = wrapped_lines[deps[1].row + 1]
+		assert.are.equal("~> 1.0", short_line:sub(deps[1].col_start + 1, deps[1].col_end))
+
+		assert.are.equal("a_very_long_package_name_here", deps[2].name)
+		assert.are.equal("~> 2.3", deps[2].requirement)
+		assert.are.equal(4, deps[2].row) -- 0-indexed line 5, the continuation line
+		local wrapped_req_line = wrapped_lines[deps[2].row + 1]
+		assert.are.equal("~> 2.3", wrapped_req_line:sub(deps[2].col_start + 1, deps[2].col_end))
+	end)
+
 	it("excludes nested list literals inside a multi-line assignment (issue #31)", function()
 		local deps = parser.parse_lines({
 			"defp deps do",
