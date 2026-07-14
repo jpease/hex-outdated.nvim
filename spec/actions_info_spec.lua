@@ -33,4 +33,16 @@ describe("actions._info_lines", function()
 		})
 		assert.is_truthy(lines[3]:find("not satisfied by requirement", 1, true))
 	end)
+
+	it("shows a fetch-failed requirement note and unavailable latest for an error dep", function()
+		local lines = actions._info_lines({
+			name = "phoenix",
+			requirement = "~> 1.7",
+			status = "error",
+		})
+		assert.is_falsy(lines[2]:find("checking…", 1, true))
+		assert.is_truthy(lines[2]:find("fetch failed", 1, true))
+		assert.is_falsy(lines[4]:find("loading", 1, true))
+		assert.is_truthy(lines[4]:find("unavailable", 1, true))
+	end)
 end)

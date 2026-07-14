@@ -67,6 +67,8 @@ local function requirement_note(status)
 		return "below latest"
 	elseif status == "invalid" then
 		return "no published match"
+	elseif status == "error" then
+		return "fetch failed"
 	end
 	return "checking…"
 end
@@ -91,7 +93,16 @@ function M._info_lines(dep)
 	else
 		lines[#lines + 1] = "locked       (not in mix.lock)"
 	end
-	local latest_str = dep.latest or (dep.status == "invalid" and "—" or "loading")
+	local latest_str
+	if dep.latest then
+		latest_str = dep.latest
+	elseif dep.status == "invalid" then
+		latest_str = "—"
+	elseif dep.status == "error" then
+		latest_str = "unavailable"
+	else
+		latest_str = "loading"
+	end
 	lines[#lines + 1] = string.format("latest       %s", latest_str)
 	return lines
 end
