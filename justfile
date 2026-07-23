@@ -21,8 +21,11 @@ fmt-check:
 # Fast static checks for the pre-commit hook (no tests)
 check-fast: fmt-check lint
 
-# Run the standard local verification set (also runs in the pre-push hook)
+# Run the standard local verification set (also runs in the pre-push hook).
+# A successful run credits the pre-push stamp too, so a manual `just check`
+# right before pushing skips a redundant rerun in the hook.
 check: check-fast test test-nvim
+    [ -f .raven/git-hooks/lib/with-verified-cache.sh ] && sh .raven/git-hooks/lib/with-verified-cache.sh check true || true
 
 # List open issues with hierarchy and priority
 list-open:
