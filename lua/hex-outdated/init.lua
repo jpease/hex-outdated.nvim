@@ -111,8 +111,16 @@ local buf_timers = {}
 local function stop_buf_timer(bufnr)
 	local timer = buf_timers[bufnr]
 	if timer then
-		timer:stop()
 		buf_timers[bufnr] = nil
+		-- vim.defer_fn closes its own timer handle just before invoking the
+		-- deferred callback (see $VIMRUNTIME/lua/vim/_core/editor.lua), so a
+		-- timer that already fired naturally is closing (or closed) by the
+		-- time anything else can observe it here; guard against closing it
+		-- again, which libuv raises an error for.
+		if not timer:is_closing() then
+			timer:stop()
+			timer:close()
+		end
 	end
 end
 

@@ -316,3 +316,80 @@ describe("auto_update debounce (issue #52)", function()
 		end)
 	end)
 end)
+
+describe("auto_update debounce timer handle leak (issue #56)", function()
+	-- vim.uv.walk visits every libuv handle in the process, including handles
+	-- owned by Neovim itself or by other tests. A stopped-but-unclosed timer
+	-- still shows up here (that is exactly the leak), while a closed one does
+	-- not count against `is_closing()`. We snapshot a baseline immediately
+	-- before the plugin activity under test and assert on the delta, so
+	-- unrelated pre-existing timer handles never make this test flaky.
+	local function count_open_timers()
+		local n = 0
+		vim.uv.walk(function(h)
+			if h:get_type() == "timer" and not h:is_closing() then
+				n = n + 1
+			end
+		end)
+		return n
+	end
+
+	it("closes a replaced debounce timer's handle instead of leaking it", function()
+		-- A huge debounce so nothing fires during the test; only handle
+		-- accounting is under test here, not callback behavior.
+		hex.setup({ enabled = false, auto_update = true, debounce_ms = 60000 })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+		local before = count_open_timers()
+		for _ = 1, 50 do
+			vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
+		end
+		collectgarbage()
+		collectgarbage()
+		local after_replacements = count_open_timers()
+		eq(
+			1,
+			after_replacements - before,
+			"50 rapid replacements must leave exactly one open plugin timer"
+		)
+
+		vim.api.nvim_buf_delete(buf, { force = true })
+		collectgarbage()
+		collectgarbage()
+		local after_teardown = count_open_timers()
+		eq(before, after_teardown, "buffer teardown must close the remaining pending timer")
+	end)
+
+	it("closes the stale timer's handle when setup() reattaches the buffer", function()
+		hex.setup({ enabled = false, auto_update = true, debounce_ms = 60000 })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+		local before = count_open_timers()
+		-- Starts a pending debounce timer under the OLD attach()'s closure.
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
+
+		-- Reattach twice without ever firing another TextChanged: the only
+		-- timer that ever existed is the stale one above, so if reattaching
+		-- truly closes it (rather than merely stopping it), the open-timer
+		-- count must return to baseline exactly, not baseline+1.
+		for _ = 1, 2 do
+			hex.setup({ enabled = false, auto_update = true, debounce_ms = 60000 })
+			vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+		end
+		collectgarbage()
+		collectgarbage()
+		local after = count_open_timers()
+		eq(
+			before,
+			after,
+			"repeated setup() must close the stale timer handle from the prior attachment,"
+				.. " leaving none pending"
+		)
+
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
+end)
