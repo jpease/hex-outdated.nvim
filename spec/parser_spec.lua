@@ -287,6 +287,94 @@ describe("parser.parse_lines (fallback)", function()
 
 		assert.are.equal(0, #deps)
 	end)
+
+	it("does not treat a 'do' inside a string requirement as a block opener (issue #57)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    [{:real, "== 1.0.0-do"}]',
+			"  end",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat a 'fn' inside a string requirement as a block opener (issue #57)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    [{:real, "== 1.0.0-fn"}]',
+			"  end",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat a ':do' option atom as a block opener (issue #57)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    [{:real, "~> 1.0", only: :do}]',
+			"  end",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat a ':fn' option atom as a block opener (issue #57)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    [{:real, "~> 1.0", only: :fn}]',
+			"  end",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it(
+		"does not leak past a nested if/do/else/end inside a real block, with an unrelated"
+			.. " sibling function (issue #57 canary)",
+		function()
+			local deps = parser.parse_lines({
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				"    if Mix.env() == :test do",
+				'      [{:real, "~> 1.0"}]',
+				"    else",
+				"      []",
+				"    end",
+				"  end",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			})
+
+			assert.are.equal(1, #deps)
+			assert.are.equal("real", deps[1].name)
+		end
+	)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()

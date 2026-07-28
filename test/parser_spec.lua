@@ -611,6 +611,58 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			desc = "'do' inside a string requirement not treated as a block opener (issue #57)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				'    [{:real, "== 1.0.0-do"}]',
+				"  end",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "'fn' inside a string requirement not treated as a block opener (issue #57)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				'    [{:real, "== 1.0.0-fn"}]',
+				"  end",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "':do' option atom not treated as a block opener (issue #57)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				'    [{:real, "~> 1.0", only: :do}]',
+				"  end",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "':fn' option atom not treated as a block opener (issue #57)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  defp deps do",
+				'    [{:real, "~> 1.0", only: :fn}]',
+				"  end",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is

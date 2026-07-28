@@ -30,34 +30,74 @@ local function strip_comment(line)
 	return line
 end
 
+-- Replace the contents of double-quoted string literals in `code` with spaces,
+-- preserving length (and the quotes themselves) so column offsets elsewhere
+-- stay meaningful. Used by `count_openers` below so a "do" or "fn" inside a
+-- string's text (e.g. a SemVer pre-release tag like "== 1.0.0-do") is never
+-- mistaken for a block-opening keyword. Uses the same in_string/escaped
+-- string-scan convention as `strip_comment` and `advance_brackets`. Like both
+-- of those, this scans one physical line at a time and does not track
+-- multi-line heredocs (`"""..."""` spanning lines) — a pre-existing
+-- limitation, not new here.
+local function mask_strings(code)
+	local out = {}
+	local in_string = false
+	local escaped = false
+	for i = 1, #code do
+		local char = code:sub(i, i)
+		if escaped then
+			out[i] = " "
+			escaped = false
+		elseif char == "\\" and in_string then
+			out[i] = " "
+			escaped = true
+		elseif char == '"' then
+			in_string = not in_string
+			out[i] = char
+		elseif in_string then
+			out[i] = " "
+		else
+			out[i] = char
+		end
+	end
+	return table.concat(out)
+end
+
 -- Count block-opening keywords ("do" starting a do/end block, and "fn" for an
 -- anonymous function) in `code`, as whole words. Used to track nested-block
 -- depth so a bare "end" line only closes the dep function when it isn't
 -- closing an inner if/case/cond/unless/with/for/receive/try/fn block —
 -- Elixir's indentation is not semantically significant, so indentation alone
--- can't tell them apart. Heuristic: doesn't mask string-literal contents, but
--- dep requirement strings and option atoms in a real mix.exs deps list won't
--- contain bare "do"/"fn" as whole words.
+-- can't tell them apart. String-literal contents are masked first (see
+-- `mask_strings`) so a "do"/"fn" inside a requirement string never counts.
+-- A "do"/"fn" immediately preceded by ":" (no space) is a bare atom literal
+-- (e.g. `only: :do`), not a keyword, and is excluded the same way; a quoted
+-- atom (`:"do"`) is already handled by the string mask above. A "do"
+-- immediately followed by ":" is the `do:` keyword-list form (e.g. one-line
+-- `do:` syntax), also excluded.
 local function count_openers(code)
+	local masked = mask_strings(code)
 	local count = 0
 	local pos = 1
 	while true do
-		local s, e = code:find("%f[%w]do%f[%W]", pos)
+		local s, e = masked:find("%f[%w]do%f[%W]", pos)
 		if not s then
 			break
 		end
-		if code:sub(e + 1, e + 1) ~= ":" then
+		if masked:sub(s - 1, s - 1) ~= ":" and masked:sub(e + 1, e + 1) ~= ":" then
 			count = count + 1
 		end
 		pos = e + 1
 	end
 	pos = 1
 	while true do
-		local s, e = code:find("%f[%w]fn%f[%W]", pos)
+		local s, e = masked:find("%f[%w]fn%f[%W]", pos)
 		if not s then
 			break
 		end
-		count = count + 1
+		if masked:sub(s - 1, s - 1) ~= ":" then
+			count = count + 1
+		end
 		pos = e + 1
 	end
 	return count
