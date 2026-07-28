@@ -223,6 +223,70 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal(1, #deps)
 		assert.are.equal("only_dep", deps[1].name)
 	end)
+
+	it(
+		"resolves a custom dependency function whose call wraps onto the next line (issue #55)",
+		function()
+			local deps = parser.parse_lines({
+				"defmodule My.MixProject do",
+				"  use Mix.Project",
+				"  def project do",
+				"    [deps:",
+				"      project_deps()]",
+				"  end",
+				"  defp project_deps do",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"end",
+			})
+
+			assert.are.equal(1, #deps)
+			assert.are.equal("jason", deps[1].name)
+			assert.are.equal("~> 1.4", deps[1].requirement)
+		end
+	)
+
+	it(
+		"does not mistake a wrapped inline deps list for a custom function call (issue #55)",
+		function()
+			-- `deps:` followed on the next line by a list literal (not a function
+			-- call) must never be parsed as a reference to a custom dep function —
+			-- it should keep routing through the inline-list fallback instead. The
+			-- line-oriented fallback parser does not yet resolve this particular
+			-- wrapped-list shape (a pre-existing, separate limitation — see the
+			-- Treesitter path, which does resolve it via the AST), but it must not
+			-- silently mistake the wrapped value for a function name and return
+			-- deps from some unrelated function.
+			local deps = parser.parse_lines({
+				"defmodule Demo.MixProject do",
+				"  use Mix.Project",
+				"  def project do",
+				"    [",
+				"      deps:",
+				'      [{:jason, "~> 1.4"}]',
+				"    ]",
+				"  end",
+				"end",
+			})
+
+			assert.are.equal(0, #deps)
+		end
+	)
+
+	it("does not mistake a nonzero-arity call for the dependency function (issue #55)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project do",
+			"    [deps: filter_deps(:prod)]",
+			"  end",
+			"  defp filter_deps(_env) do",
+			'    [{:jason, "~> 1.4"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(0, #deps)
+	end)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()

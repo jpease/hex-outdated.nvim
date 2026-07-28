@@ -63,14 +63,24 @@ local function count_openers(code)
 	return count
 end
 
+-- Scan for a custom dependency function referenced as `deps: name(...)`. The
+-- keyword's value can wrap onto a following line (e.g. `[deps:\n  project_deps()]`,
+-- valid Elixir), so the search runs against all lines joined with "\n" rather than
+-- one physical line at a time — `%s` in a Lua pattern already matches "\n", so the
+-- existing pattern needs no change beyond having the newlines available to match
+-- against. The pattern still anchors immediately to the text following `deps:`:
+-- it requires a bare identifier directly (modulo whitespace only) followed by an
+-- opening paren, so an inline list value wrapped onto the next line
+-- (`deps:\n  [...]`) never matches here (`[` cannot start the identifier class)
+-- and continues to route to `parse_inline_deps` / the Treesitter
+-- `find_deps_pair_value` path instead.
 local function configured_dep_function(lines)
-	for _, line in ipairs(lines) do
-		local name = strip_comment(line):match("deps%s*:%s*([%a_][%w_!?]*)%s*%(")
-		if name then
-			return name
-		end
+	local stripped = {}
+	for i, line in ipairs(lines) do
+		stripped[i] = strip_comment(line)
 	end
-	return "deps"
+	local name = table.concat(stripped, "\n"):match("deps%s*:%s*([%a_][%w_!?]*)%s*%(")
+	return name or "deps"
 end
 
 -- Stateful multi-line function-head matcher for `name`. Feed it each source

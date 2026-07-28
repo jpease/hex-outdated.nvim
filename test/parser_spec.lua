@@ -358,6 +358,55 @@ describe("parser (treesitter)", function()
 		eq("plug", result[2].name)
 		eq("~> 1.15", result[2].requirement)
 	end)
+
+	it(
+		"resolves a custom dependency function whose call wraps onto the next line (issue #55)",
+		function()
+			local mix_multiline_deps_value = {
+				"defmodule My.MixProject do",
+				"  use Mix.Project",
+				"  def project do",
+				"    [deps:",
+				"      project_deps()]",
+				"  end",
+				"  defp project_deps do",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"end",
+			}
+			local b = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_multiline_deps_value)
+			vim.bo[b].filetype = "elixir"
+			local result = parser.parse_buffer(b)
+			eq(1, #result)
+			eq("jason", result[1].name)
+			eq("~> 1.4", result[1].requirement)
+		end
+	)
+
+	it(
+		"resolves an inline deps list wrapped onto the next line via the AST"
+			.. " (issue #55, no custom-function match needed)",
+		function()
+			local mix_wrapped_inline_list = {
+				"defmodule Demo.MixProject do",
+				"  use Mix.Project",
+				"  def project do",
+				"    [",
+				"      deps:",
+				'      [{:jason, "~> 1.4"}]',
+				"    ]",
+				"  end",
+				"end",
+			}
+			local b = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_wrapped_inline_list)
+			vim.bo[b].filetype = "elixir"
+			local result = parser.parse_buffer(b)
+			eq(1, #result)
+			eq("jason", result[1].name)
+		end
+	)
 end)
 
 -- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
@@ -544,6 +593,20 @@ describe("parser parity: treesitter vs fallback", function()
 				'      version: "0.1.0",',
 				'      deps: [{:jason, "~> 1.4"}, {:plug, "~> 1.15"}]',
 				"    ]",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "custom dependency function call wraps onto the next line (issue #55)",
+			lines = {
+				"defmodule App.MixProject do",
+				"  def project do",
+				"    [deps:",
+				"      project_deps()]",
+				"  end",
+				"  defp project_deps do",
+				'    [{:jason, "~> 1.4"}]',
 				"  end",
 				"end",
 			},
