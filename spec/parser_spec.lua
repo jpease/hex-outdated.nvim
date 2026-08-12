@@ -376,6 +376,56 @@ describe("parser.parse_lines (fallback)", function()
 		end
 	)
 
+	it("does not treat 'run_do:' as a block opener (issue #58)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    [{:real, "~> 1.0", run_do: true}]',
+			"  end",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat '_do_' as a block opener (issue #58)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			"    x = a_do_b",
+			'    [{:real, "~> 1.0"}]',
+			"  end",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat '_fn_' as a block opener (issue #58)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			"    x = a_fn_b",
+			'    [{:real, "~> 1.0"}]',
+			"  end",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
 	it("ignores a colliding dep function in an earlier module (issue #61)", function()
 		local deps = parser.parse_lines({
 			"defmodule Helper do",

@@ -63,39 +63,32 @@ local function mask_strings(code)
 	return table.concat(out)
 end
 
--- Count block-opening keywords ("do" starting a do/end block, and "fn" for an
--- anonymous function) in `code`, as whole words. Used to track nested-block
--- depth so a bare "end" line only closes the dep function when it isn't
--- closing an inner if/case/cond/unless/with/for/receive/try/fn block —
--- Elixir's indentation is not semantically significant, so indentation alone
--- can't tell them apart. String-literal contents are masked first (see
--- `mask_strings`) so a "do"/"fn" inside a requirement string never counts.
--- A "do"/"fn" immediately preceded by ":" (no space) is a bare atom literal
--- (e.g. `only: :do`), not a keyword, and is excluded the same way; a quoted
--- atom (`:"do"`) is already handled by the string mask above. A "do"
--- immediately followed by ":" is the `do:` keyword-list form (e.g. one-line
--- `do:` syntax), also excluded.
-local function count_openers(code)
-	local masked = mask_strings(code)
+-- Frontier pair for scanning a bare keyword ("do", "fn", "end") as a whole
+-- token. Elixir identifiers may contain "_", but Lua's `%w` class does not,
+-- so a plain `%f[%w]...%f[%W]` frontier fires *across* an underscore: both
+-- `do_thing` (prefix) and `fetch_do` (suffix) would present a boundary at the
+-- "do" they merely contain. Treating "_" as a word character in both
+-- directions closes that gap (issue #58) while leaving every other boundary
+-- — whitespace, punctuation, start/end of line — unaffected.
+local KEYWORD_OPEN = "%f[%w_]"
+local KEYWORD_CLOSE = "%f[^%w_]"
+
+-- Count occurrences of `word` as a whole token in already string-masked
+-- `masked` text (see `mask_strings`), calling `guard(masked, s, e)` for each
+-- match (1-indexed, inclusive `s`/`e`) and counting it only when `guard`
+-- returns true or is omitted. Shared by `count_openers` and `count_closers`
+-- below so the underscore-aware frontier pair is defined once rather than
+-- repeated across the `do`, `fn`, and `end` scans.
+local function count_keyword(masked, word, guard)
+	local pattern = KEYWORD_OPEN .. word .. KEYWORD_CLOSE
 	local count = 0
 	local pos = 1
 	while true do
-		local s, e = masked:find("%f[%w]do%f[%W]", pos)
+		local s, e = masked:find(pattern, pos)
 		if not s then
 			break
 		end
-		if masked:sub(s - 1, s - 1) ~= ":" and masked:sub(e + 1, e + 1) ~= ":" then
-			count = count + 1
-		end
-		pos = e + 1
-	end
-	pos = 1
-	while true do
-		local s, e = masked:find("%f[%w]fn%f[%W]", pos)
-		if not s then
-			break
-		end
-		if masked:sub(s - 1, s - 1) ~= ":" then
+		if not guard or guard(masked, s, e) then
 			count = count + 1
 		end
 		pos = e + 1
@@ -103,7 +96,35 @@ local function count_openers(code)
 	return count
 end
 
--- Count block-closing `end` keywords in `code`, as whole words, applying the
+-- A keyword immediately preceded by ":" (no space) is a bare atom literal
+-- (e.g. `only: :do`), not a keyword, and is excluded; a quoted atom
+-- (`:"do"`) is already handled by the string mask in `mask_strings`.
+local function not_bare_atom(masked, s)
+	return masked:sub(s - 1, s - 1) ~= ":"
+end
+
+-- As `not_bare_atom`, but also excludes a keyword immediately followed by
+-- ":" — the `do:`/`end:` keyword-list form (e.g. one-line `do:` syntax).
+-- Only "do" and "end" have such a form; "fn" does not, so it uses
+-- `not_bare_atom` alone.
+local function not_bare_atom_or_keyword_form(masked, s, e)
+	return not_bare_atom(masked, s) and masked:sub(e + 1, e + 1) ~= ":"
+end
+
+-- Count block-opening keywords ("do" starting a do/end block, and "fn" for an
+-- anonymous function) in `code`, as whole tokens. Used to track nested-block
+-- depth so a bare "end" line only closes the dep function when it isn't
+-- closing an inner if/case/cond/unless/with/for/receive/try/fn block —
+-- Elixir's indentation is not semantically significant, so indentation alone
+-- can't tell them apart. String-literal contents are masked first (see
+-- `mask_strings`) so a "do"/"fn" inside a requirement string never counts.
+local function count_openers(code)
+	local masked = mask_strings(code)
+	return count_keyword(masked, "do", not_bare_atom_or_keyword_form)
+		+ count_keyword(masked, "fn", not_bare_atom)
+end
+
+-- Count block-closing `end` keywords in `code`, as whole tokens, applying the
 -- same string masking and bare-atom (`:end` / `end:`) exclusions `count_openers`
 -- applies to `do`. Paired with `count_openers` by `module_ranges` below to find
 -- where each `defmodule` block starts and ends. The dep-function scanners
@@ -111,19 +132,7 @@ end
 -- because they only ever need to close the one block they are already inside.
 local function count_closers(code)
 	local masked = mask_strings(code)
-	local count = 0
-	local pos = 1
-	while true do
-		local s, e = masked:find("%f[%w]end%f[%W]", pos)
-		if not s then
-			break
-		end
-		if masked:sub(s - 1, s - 1) ~= ":" and masked:sub(e + 1, e + 1) ~= ":" then
-			count = count + 1
-		end
-		pos = e + 1
-	end
-	return count
+	return count_keyword(masked, "end", not_bare_atom_or_keyword_form)
 end
 
 -- Line ranges of every `defmodule ... do ... end` block in the file, as

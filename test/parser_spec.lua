@@ -830,6 +830,135 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			-- `_` is not in Lua's `%w` class, so the old `%f[%w]do%f[%W]` frontier
+			-- fired across it: an atom value merely *containing* `_fn` (here
+			-- `only: :my_fn`) was miscounted as an `fn` block opener, `block_depth`
+			-- never returned to zero, and `unrelated`'s tuple leaked in.
+			desc = "atom value ending in '_fn' not treated as a block opener (issue #58, repro A)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				'    [{:real, "~> 1.0", only: :my_fn}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "bare identifier ending in '_do' not treated as a block opener (issue #58, repro B)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				"    x = fetch_do",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- Prefix form: the closing frontier `%f[%W]` fired on the trailing `_`
+			-- just as the opening one fired on a leading `_`, so `do_`-prefixed
+			-- identifiers (a common recursive-helper naming convention in Elixir)
+			-- reproduced identically to the suffix forms above.
+			desc = "identifier starting with 'do_' not treated as a block opener (issue #58, repro C)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				"    x = do_thing(1)",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- #61's `count_closers` scans for `end` with the identical `_`-boundary
+			-- bug: `end_of_list` was miscounted as a block closer, popping the
+			-- `defmodule` entry in `module_ranges` early so `module_scope` truncated
+			-- before `deps/0`, which then fell outside the scope `configured_dep_function`
+			-- and the head matcher are restricted to.
+			desc = "identifier containing 'end_' not treated as a block closer (issue #58)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  def project do",
+				"    x = end_of_list",
+				"    [deps: deps()]",
+				"  end",
+				"",
+				"  defp deps do",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- Genuine block openers named in the issue's acceptance criteria must
+			-- still count once the frontier is underscore-aware: each pairs a
+			-- keyword-adjacent `do`/`fn` with a bare `end` on its own line, so the
+			-- fallback's block-depth accounting must stay balanced through all of
+			-- them and still reach the trailing dep list.
+			desc = "genuine if/case/cond/with/receive/try/for/fn block openers still counted (issue #58)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				"    if Mix.env() == :test do",
+				"      :ok",
+				"    end",
+				"",
+				"    case Mix.env() do",
+				"      :test -> :ok",
+				"      _ -> :ok",
+				"    end",
+				"",
+				"    cond do",
+				"      true -> :ok",
+				"    end",
+				"",
+				"    with {:ok, _} <- {:ok, 1} do",
+				"      :ok",
+				"    end",
+				"",
+				"    receive do",
+				"      _ -> :ok",
+				"    after",
+				"      0 -> :ok",
+				"    end",
+				"",
+				"    try do",
+				"      :ok",
+				"    rescue",
+				"      _ -> :ok",
+				"    end",
+				"",
+				"    for _ <- [1, 2] do",
+				"      :ok",
+				"    end",
+				"",
+				"    fn ->",
+				"      :ok",
+				"    end",
+				"",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is
