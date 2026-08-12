@@ -407,6 +407,59 @@ describe("parser (treesitter)", function()
 			eq("jason", result[1].name)
 		end
 	)
+
+	it("resolves a one-line project/0 with an inline deps list (issue #61)", function()
+		local mix_one_line_inline = {
+			"defmodule Demo.MixProject do",
+			'  def project, do: [deps: [{:real, "~> 1.0"}]]',
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_one_line_inline)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("real", result[1].name)
+		eq("~> 1.0", result[1].requirement)
+	end)
+
+	it("resolves a one-line project/0 delegating to a dep function (issue #61)", function()
+		local mix_one_line_delegating = {
+			"defmodule Demo.MixProject do",
+			"  def project, do: [deps: custom_deps()]",
+			'  defp custom_deps, do: [{:real, "~> 2.0"}]',
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_one_line_delegating)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("real", result[1].name)
+		eq("~> 2.0", result[1].requirement)
+	end)
+
+	it("ignores a colliding dep function in a nested module (issue #61)", function()
+		local mix_nested_module = {
+			"defmodule Demo.MixProject do",
+			"  defmodule Inner do",
+			'    def deps, do: [{:wrong, "~> 1.0"}]',
+			"  end",
+			"  def project do",
+			"    [deps: deps()]",
+			"  end",
+			"  defp deps do",
+			'    [{:real, "~> 2.0"}]',
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_nested_module)
+		vim.bo[b].filetype = "elixir"
+		local result = parser.parse_buffer(b)
+		eq(1, #result)
+		eq("real", result[1].name)
+	end)
 end)
 
 -- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
@@ -426,6 +479,10 @@ describe("parser parity: treesitter vs fallback", function()
 	end
 
 	-- Each case is a complete, valid mix.exs snippet exercising one shared rule.
+	-- `expect`, when present, is the exact list of dep names both paths must
+	-- return. Cases without it assert agreement only; a case whose bug makes both
+	-- paths agree on the *wrong* answer (e.g. both returning nothing) must set it,
+	-- or the parity assertion alone would pass vacuously.
 	local CASES = {
 		{
 			desc = "hex deps with scm tuples skipped",
@@ -663,6 +720,116 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			desc = "colliding deps/0 in an earlier module ignored (issue #61, repro A)",
+			expect = { "real" },
+			lines = {
+				"defmodule Helper do",
+				'  def deps, do: [{:wrong, "~> 1.0"}]',
+				"end",
+				"",
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				'  defp deps, do: [{:real, "~> 2.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "colliding deps/0 in a later module ignored (issue #61)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [deps: deps()]",
+				"  end",
+				"  defp deps do",
+				'    [{:real, "~> 2.0"}]',
+				"  end",
+				"end",
+				"",
+				"defmodule Helper do",
+				"  def deps do",
+				'    [{:wrong, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "colliding deps/0 in a nested module ignored (issue #61)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defmodule Inner do",
+				'    def deps, do: [{:wrong, "~> 1.0"}]',
+				"  end",
+				"  def project do",
+				"    [deps: deps()]",
+				"  end",
+				"  defp deps do",
+				'    [{:real, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "'deps: name()' text inside a string literal ignored (issue #61, repro B)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				'  @doc "example deps: fake()"',
+				"  def project, do: [deps: deps()]",
+				'  defp deps, do: [{:real, "~> 2.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "one-line project/0 with an inline deps list (issue #61, repro C)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				'  def project, do: [deps: [{:real, "~> 1.0"}]]',
+				"end",
+			},
+		},
+		{
+			desc = "one-line project/0 delegating to a custom dep function (issue #61)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: custom_deps()]",
+				'  defp custom_deps, do: [{:real, "~> 2.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "inline deps list in another module ignored (issue #61)",
+			expect = { "real" },
+			lines = {
+				"defmodule Helper do",
+				'  def config, do: [deps: [{:wrong, "~> 1.0"}]]',
+				"end",
+				"",
+				"defmodule Demo.MixProject do",
+				'  def project, do: [deps: [{:real, "~> 2.0"}]]',
+				"end",
+			},
+		},
+		{
+			-- Criterion: a file with no locatable project/0 must keep resolving via
+			-- the whole-file dep-function search rather than returning nothing.
+			desc = "dep function found with no project/0 in the file (issue #61)",
+			expect = { "jason" },
+			lines = {
+				"defmodule App.MixProject do",
+				"  def config do",
+				"    [deps: project_deps()]",
+				"  end",
+				"  defp project_deps do",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is
@@ -682,6 +849,14 @@ describe("parser parity: treesitter vs fallback", function()
 		return out
 	end
 
+	local function names(shaped)
+		local out = {}
+		for i, d in ipairs(shaped) do
+			out[i] = d.name
+		end
+		return out
+	end
+
 	for _, case in ipairs(CASES) do
 		it("agrees on " .. case.desc, function()
 			local b = vim.api.nvim_create_buf(false, true)
@@ -690,6 +865,10 @@ describe("parser parity: treesitter vs fallback", function()
 			local ts = shape(parser.parse_buffer(b))
 			local fallback = shape(parser.parse_lines(case.lines))
 			eq(ts, fallback, "treesitter vs fallback for: " .. case.desc)
+			if case.expect then
+				eq(case.expect, names(ts), "treesitter dep names for: " .. case.desc)
+				eq(case.expect, names(fallback), "fallback dep names for: " .. case.desc)
+			end
 		end)
 	end
 end)

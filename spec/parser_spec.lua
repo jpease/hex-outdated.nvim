@@ -375,6 +375,160 @@ describe("parser.parse_lines (fallback)", function()
 			assert.are.equal("real", deps[1].name)
 		end
 	)
+
+	it("ignores a colliding dep function in an earlier module (issue #61)", function()
+		local deps = parser.parse_lines({
+			"defmodule Helper do",
+			'  def deps, do: [{:wrong, "~> 1.0"}]',
+			"end",
+			"",
+			"defmodule Demo.MixProject do",
+			"  def project, do: [deps: deps()]",
+			'  defp deps, do: [{:real, "~> 2.0"}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+		assert.are.equal("~> 2.0", deps[1].requirement)
+	end)
+
+	it("ignores a colliding dep function in a later module (issue #61)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project do",
+			"    [deps: deps()]",
+			"  end",
+			"  defp deps do",
+			'    [{:real, "~> 2.0"}]',
+			"  end",
+			"end",
+			"",
+			"defmodule Helper do",
+			"  def deps do",
+			'    [{:wrong, "~> 1.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("ignores a colliding dep function in a nested module (issue #61)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  defmodule Inner do",
+			"    def deps do",
+			'      [{:wrong, "~> 1.0"}]',
+			"    end",
+			"  end",
+			"  def project do",
+			"    [deps: deps()]",
+			"  end",
+			"  defp deps do",
+			'    [{:real, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("ignores a 'deps: name()' fragment inside a string literal (issue #61)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			'  @doc "example deps: fake()"',
+			"  def project, do: [deps: deps()]",
+			'  defp deps, do: [{:real, "~> 2.0"}]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("ignores a 'deps: name()' fragment in a sibling function's string (issue #61)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project do",
+			"    [deps: project_deps()]",
+			"  end",
+			"  defp docs do",
+			'    [note: "configure with deps: fake()"]',
+			"  end",
+			"  defp project_deps do",
+			'    [{:real, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("ignores an inline deps list in another module (issue #61)", function()
+		local deps = parser.parse_lines({
+			"defmodule Helper do",
+			'  def config, do: [deps: [{:wrong, "~> 1.0"}]]',
+			"end",
+			"",
+			"defmodule Demo.MixProject do",
+			'  def project, do: [deps: [{:real, "~> 2.0"}]]',
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("keeps a returned-variable dep list scoped to project's module (issue #61)", function()
+		local deps = parser.parse_lines({
+			"defmodule Helper do",
+			"  def deps do",
+			"    deps = [",
+			'      {:wrong, "~> 1.0"}',
+			"    ]",
+			"    deps",
+			"  end",
+			"end",
+			"",
+			"defmodule Demo.MixProject do",
+			"  def project do",
+			"    [deps: deps()]",
+			"  end",
+			"  defp deps do",
+			"    deps = [",
+			'      {:real, "~> 2.0"}',
+			"    ]",
+			"    deps",
+			"  end",
+			"end",
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it(
+		"still resolves the dep function by whole-file search with no project/0 (issue #61)",
+		function()
+			local deps = parser.parse_lines({
+				"defmodule App.MixProject do",
+				"  def config do",
+				"    [deps: project_deps()]",
+				"  end",
+				"  defp project_deps do",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"end",
+			})
+
+			assert.are.equal(1, #deps)
+			assert.are.equal("jason", deps[1].name)
+		end
+	)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()

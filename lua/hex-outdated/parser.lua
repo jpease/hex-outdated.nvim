@@ -103,6 +103,100 @@ local function count_openers(code)
 	return count
 end
 
+-- Count block-closing `end` keywords in `code`, as whole words, applying the
+-- same string masking and bare-atom (`:end` / `end:`) exclusions `count_openers`
+-- applies to `do`. Paired with `count_openers` by `module_ranges` below to find
+-- where each `defmodule` block starts and ends. The dep-function scanners
+-- elsewhere in this file use a stricter "`end` alone on its line" test instead,
+-- because they only ever need to close the one block they are already inside.
+local function count_closers(code)
+	local masked = mask_strings(code)
+	local count = 0
+	local pos = 1
+	while true do
+		local s, e = masked:find("%f[%w]end%f[%W]", pos)
+		if not s then
+			break
+		end
+		if masked:sub(s - 1, s - 1) ~= ":" and masked:sub(e + 1, e + 1) ~= ":" then
+			count = count + 1
+		end
+		pos = e + 1
+	end
+	return count
+end
+
+-- Line ranges of every `defmodule ... do ... end` block in the file, as
+-- { first = the `defmodule` line, last = its matching `end` line }, both
+-- 1-indexed and inclusive. Nesting is tracked by the net opener/closer count per
+-- line, so a block whose keywords do not balance (an unterminated module, say)
+-- is simply never recorded and callers degrade to whole-file scanning. Blocks
+-- are appended as they close, so inner modules always precede their parents.
+local function module_ranges(lines)
+	local stack = {}
+	local ranges = {}
+	for i, line in ipairs(lines) do
+		local code = strip_comment(line)
+		local net = count_openers(code) - count_closers(code)
+		if net > 0 then
+			-- The first opener on a `defmodule` line is the module's own `do`; any
+			-- others (a trailing `fn`, say) nest inside it.
+			local is_module = code:match("^%s*defmodule%f[%W]") ~= nil
+			for k = 1, net do
+				stack[#stack + 1] = { first = i, module = is_module and k == 1 }
+			end
+		elseif net < 0 then
+			for _ = 1, -net do
+				local top = table.remove(stack)
+				if not top then
+					break
+				end
+				if top.module then
+					ranges[#ranges + 1] = { first = top.first, last = i }
+				end
+			end
+		end
+	end
+	return ranges
+end
+
+-- The set of line numbers belonging to the module that defines `project/0`
+-- (`project_line` is that definition's head line), excluding any module nested
+-- inside it. Dependency-function lookup is restricted to these lines so a
+-- same-named zero-arity function in some other module — earlier, later, or
+-- nested — never wins. Returns nil when no enclosing `defmodule` block can be
+-- identified, in which case callers scan the whole file as they did before.
+local function module_scope(lines, project_line)
+	local ranges = module_ranges(lines)
+	local owner
+	for _, range in ipairs(ranges) do
+		if range.first <= project_line and project_line <= range.last then
+			owner = range -- innermost, since inner modules are recorded first
+			break
+		end
+	end
+	if not owner then
+		return nil
+	end
+	local scope = {}
+	for i = owner.first, owner.last do
+		scope[i] = true
+	end
+	for _, range in ipairs(ranges) do
+		if range ~= owner and owner.first < range.first and range.last <= owner.last then
+			for i = range.first, range.last do
+				scope[i] = nil
+			end
+		end
+	end
+	return scope
+end
+
+-- A nil scope means "no module restriction" (see `module_scope`).
+local function in_scope(scope, i)
+	return scope == nil or scope[i] == true
+end
+
 -- Scan for a custom dependency function referenced as `deps: name(...)`. The
 -- keyword's value can wrap onto a following line (e.g. `[deps:\n  project_deps()]`,
 -- valid Elixir), so the search runs against all lines joined with "\n" rather than
@@ -114,10 +208,16 @@ end
 -- (`deps:\n  [...]`) never matches here (`[` cannot start the identifier class)
 -- and continues to route to `parse_inline_deps` / the Treesitter
 -- `find_deps_pair_value` path instead.
-local function configured_dep_function(lines)
+--
+-- `first`/`last` narrow the search to `project/0`'s own body when that body can
+-- be located (see `locate_project`), so `deps: name()` text anywhere else in the
+-- file — most importantly inside a string or docstring — can never redirect the
+-- lookup. They default to the whole file, which is what callers pass when no
+-- `project/0` is available to anchor on.
+local function configured_dep_function(lines, first, last)
 	local stripped = {}
-	for i, line in ipairs(lines) do
-		stripped[i] = strip_comment(line)
+	for i = first or 1, last or #lines do
+		stripped[#stripped + 1] = strip_comment(lines[i])
 	end
 	local name = table.concat(stripped, "\n"):match("deps%s*:%s*([%a_][%w_!?]*)%s*%(")
 	return name or "deps"
@@ -174,6 +274,39 @@ local function new_head_matcher(name)
 	end
 end
 
+-- Locate the file's zero-arity `project/0` definition — the anchor for all
+-- dependency discovery, since the dep list is whatever `project/0` names.
+-- Returns the head line plus the inclusive line range of its body, all
+-- 1-indexed, or nil when no `project/0` head can be found. For the one-line
+-- `def project, do: ...` form the head line *is* the body. For the block form
+-- the body runs to the matching `end`, found with the same nested-block
+-- accounting the dep-function scanners use.
+local function locate_project(lines)
+	local match_head = new_head_matcher("project")
+	for i, line in ipairs(lines) do
+		local indent, one_line = match_head(strip_comment(line))
+		if indent ~= nil then
+			if one_line then
+				return i, i, i
+			end
+			local block_depth = 0
+			for j = i + 1, #lines do
+				local code = strip_comment(lines[j])
+				if code:match("^%s*end%s*$") then
+					if block_depth == 0 then
+						return i, i + 1, j - 1
+					end
+					block_depth = block_depth - 1
+				else
+					block_depth = block_depth + count_openers(code)
+				end
+			end
+			return i, i + 1, #lines
+		end
+	end
+	return nil
+end
+
 local function package_alias(text)
 	return text:match("hex%s*:%s*:([%w_]+)")
 end
@@ -183,17 +316,22 @@ end
 -- assigned to that variable IS the dependency list and must not be excluded as a
 -- plain assignment RHS. Returns nil when the body's last expression is not a bare
 -- variable (e.g. a list literal or a composed `base() ++ [...]`).
-local function returned_variable(lines, dep_function)
+--
+-- `scope` restricts which lines may start a `dep_function` definition, exactly as
+-- in `parse_lines`, so a same-named function in another module is not inspected.
+local function returned_variable(lines, dep_function, scope)
 	local active = false
 	local last_expr
 	local block_depth
 	local match_head = new_head_matcher(dep_function)
-	for _, line in ipairs(lines) do
+	for i, line in ipairs(lines) do
 		local code = strip_comment(line)
 		if not active then
-			local indent, one_line = match_head(code)
-			if indent ~= nil and not one_line then
-				active, last_expr, block_depth = true, nil, 0
+			if in_scope(scope, i) then
+				local indent, one_line = match_head(code)
+				if indent ~= nil and not one_line then
+					active, last_expr, block_depth = true, nil, 0
+				end
 			end
 		elseif code:match("^%s*end%s*$") then
 			if block_depth == 0 then
@@ -312,8 +450,10 @@ end
 -- stays active until that list's own closing `]` — tracked with the same
 -- bracket-depth bookkeeping `advance_brackets` uses elsewhere in this file —
 -- rather than a def/defp `end`. Used only when the primary scan in
--- `M.parse_lines` finds no deps at all.
-local function parse_inline_deps(lines)
+-- `M.parse_lines` finds no deps at all. `scope` restricts which lines may open
+-- such a list, so an inline `deps: [...]` belonging to some other module is not
+-- mistaken for the project's dependencies.
+local function parse_inline_deps(lines, scope)
 	local deps = {}
 	local active = false
 	local brackets
@@ -322,7 +462,10 @@ local function parse_inline_deps(lines)
 		local code = strip_comment(line)
 		local search_pos = 1
 		if not active then
-			local match_start, open_end = code:find("deps%s*:%s*%[")
+			local match_start, open_end
+			if in_scope(scope, i) then
+				match_start, open_end = code:find("deps%s*:%s*%[")
+			end
 			if match_start then
 				active = true
 				brackets = new_bracket_state(nil)
@@ -407,8 +550,13 @@ end
 --- Returns a list of dep tables with 0-indexed `row`, `col_start`, `col_end`.
 function M.parse_lines(lines)
 	local deps = {}
-	local dep_function = configured_dep_function(lines)
-	local returned_var = returned_variable(lines, dep_function)
+	-- Anchor discovery on `project/0`: its body names the dep function, and its
+	-- module bounds where that function may be defined. When `project/0` cannot be
+	-- located both narrowings fall away and the scan behaves exactly as before.
+	local project_line, project_first, project_last = locate_project(lines)
+	local dep_function = configured_dep_function(lines, project_first, project_last)
+	local scope = project_line and module_scope(lines, project_line) or nil
+	local returned_var = returned_variable(lines, dep_function, scope)
 	local active = false
 	local function_indent
 	local one_line = false
@@ -420,8 +568,10 @@ function M.parse_lines(lines)
 		local code = strip_comment(line)
 		local just_activated = false
 		if not active then
-			function_indent, one_line = match_head(code)
-			active = function_indent ~= nil
+			if in_scope(scope, i) then
+				function_indent, one_line = match_head(code)
+				active = function_indent ~= nil
+			end
 			if active then
 				brackets = new_bracket_state(returned_var)
 				pending = nil
@@ -553,7 +703,7 @@ function M.parse_lines(lines)
 		end
 	end
 	if #deps == 0 then
-		local inline = parse_inline_deps(lines)
+		local inline = parse_inline_deps(lines, scope)
 		if #inline > 0 then
 			return inline
 		end
@@ -601,6 +751,28 @@ local function child_of_type(node, node_type)
 	end
 end
 
+-- The value node of the `name:` pair inside a `keywords` node, or nil. Verified
+-- against tree-sitter-elixir's grammar: a `keywords` node holds `pair` children,
+-- each with a `keyword` node (whose text includes the trailing ":") and a value.
+local function keyword_pair_value(keywords, name, bufnr)
+	if not keywords then
+		return nil
+	end
+	for i = 0, keywords:named_child_count() - 1 do
+		local pair = keywords:named_child(i)
+		if pair:type() == "pair" then
+			local key = pair:named_child(0)
+			local value = pair:named_child(1)
+			-- The keyword's text spans its own trailing whitespace, which may be a
+			-- newline when the value wraps onto the next line.
+			if key and value and node_text(key, bufnr):match("^" .. name .. "%s*:%s*$") then
+				return value
+			end
+		end
+	end
+	return nil
+end
+
 local function definition_name(node, bufnr)
 	if node:type() ~= "call" then
 		return nil
@@ -622,8 +794,62 @@ local function definition_name(node, bufnr)
 	end
 end
 
-local function definition_body(node)
-	return child_of_type(node, "do_block") or node
+-- The body of a `def`/`defp` definition: its `do_block` for the block form, or
+-- the value of the `do:` keyword for the one-line `def name, do: expr` form,
+-- which tree-sitter-elixir represents as `call → arguments → keywords →
+-- pair(keyword "do:") → value` with no `do_block` child at all. Falls back to the
+-- whole node when neither shape matches, which is also what a test double gets.
+local function definition_body(node, bufnr)
+	if type(node.type) ~= "function" then
+		return node -- test doubles that only exercise query compilation
+	end
+	local block = child_of_type(node, "do_block")
+	if block then
+		return block
+	end
+	local arguments = child_of_type(node, "arguments")
+	local keywords = arguments and child_of_type(arguments, "keywords")
+	return keyword_pair_value(keywords, "do", bufnr) or node
+end
+
+local function is_defmodule(node, bufnr)
+	if node:type() ~= "call" then
+		return false
+	end
+	local target = node:field("target")[1]
+	return target ~= nil and node_text(target, bufnr) == "defmodule"
+end
+
+-- The `do_block` of the nearest `defmodule` enclosing `node`, or nil when there
+-- is none. Restricting a definition lookup to this subtree is what anchors
+-- dependency discovery to `project/0`'s own module.
+local function enclosing_module_body(node, bufnr)
+	local current = node:parent()
+	while current do
+		if is_defmodule(current, bufnr) then
+			return child_of_type(current, "do_block")
+		end
+		current = current:parent()
+	end
+	return nil
+end
+
+-- The name of a zero-arity call expression, e.g. `deps` in `deps: deps()`.
+-- Returns nil for a call that takes arguments (`filter_deps(:prod)`), for a
+-- qualified call (`Deps.all()`), and for any other node type.
+local function zero_arity_call_name(node, bufnr)
+	if node:type() ~= "call" then
+		return nil
+	end
+	local target = node:field("target")[1]
+	if not target or target:type() ~= "identifier" then
+		return nil
+	end
+	local arguments = child_of_type(node, "arguments")
+	if arguments and arguments:named_child_count() > 0 then
+		return nil
+	end
+	return node_text(target, bufnr)
 end
 
 -- Locate the `deps:` pair's value node within a `[key: val, ...]` keyword
@@ -637,21 +863,7 @@ local function find_deps_pair_value(list_node, bufnr)
 	if type(list_node.type) ~= "function" or list_node:type() ~= "list" then
 		return nil
 	end
-	local keywords = child_of_type(list_node, "keywords")
-	if not keywords then
-		return nil
-	end
-	for i = 0, keywords:named_child_count() - 1 do
-		local pair = keywords:named_child(i)
-		if pair:type() == "pair" then
-			local key = pair:named_child(0)
-			local value = pair:named_child(1)
-			if key and value and node_text(key, bufnr):match("^deps%s*:%s*$") then
-				return value
-			end
-		end
-	end
-	return nil
+	return keyword_pair_value(child_of_type(list_node, "keywords"), "deps", bufnr)
 end
 
 -- The dependency list is the function's return value, i.e. the last expression
@@ -712,19 +924,30 @@ local function is_def_arity_zero(node)
 	return false
 end
 
-local function find_definition(node, bufnr, name)
+-- The `def`/`defp` node defining `name/0` within `node`'s subtree, in document
+-- order. With `skip_nested_modules`, `defmodule` children are not descended
+-- into, so a search scoped to one module's body ignores modules nested in it.
+local function find_definition_node(node, bufnr, name, skip_nested_modules)
 	if type(node.type) ~= "function" then
 		return node -- test doubles that only exercise query compilation
 	end
 	if definition_name(node, bufnr) == name and is_def_arity_zero(node) then
-		return definition_body(node)
+		return node
 	end
 	for i = 0, node:named_child_count() - 1 do
-		local found = find_definition(node:named_child(i), bufnr, name)
-		if found then
-			return found
+		local child = node:named_child(i)
+		if not (skip_nested_modules and is_defmodule(child, bufnr)) then
+			local found = find_definition_node(child, bufnr, name, skip_nested_modules)
+			if found then
+				return found
+			end
 		end
 	end
+end
+
+local function find_definition(node, bufnr, name, skip_nested_modules)
+	local def = find_definition_node(node, bufnr, name, skip_nested_modules)
+	return def and definition_body(def, bufnr) or nil
 end
 
 local function parse_treesitter(bufnr)
@@ -744,16 +967,35 @@ local function parse_treesitter(bufnr)
 			and vim.api.nvim_buf_get_lines
 			and vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 		or {}
-	local body = find_definition(tree:root(), bufnr, configured_dep_function(lines))
-	if not body then
-		local project_body = find_definition(tree:root(), bufnr, "project")
-		if project_body then
-			local project_list = return_expression(project_body, bufnr)
-			local deps_value = find_deps_pair_value(project_list, bufnr)
-			if deps_value and deps_value:type() == "list" then
+	-- Resolve through `project/0` first: the dependency list is whatever the
+	-- `deps:` key of the list it returns names, resolved inside `project/0`'s own
+	-- module. Guessing a name from file text and searching the whole tree is only
+	-- a fallback for files where that chain cannot be followed.
+	local root = tree:root()
+	local project = find_definition_node(root, bufnr, "project")
+	if project and type(project.type) ~= "function" then
+		project = nil -- test double; nothing to scope against
+	end
+	local scope, scoped = root, false
+	local body
+	if project then
+		local module_body = enclosing_module_body(project, bufnr)
+		if module_body then
+			scope, scoped = module_body, true
+		end
+		local returned = return_expression(definition_body(project, bufnr), bufnr)
+		local deps_value = find_deps_pair_value(returned, bufnr)
+		if deps_value then
+			if deps_value:type() == "list" then
 				body = deps_value
+			else
+				local name = zero_arity_call_name(deps_value, bufnr)
+				body = name and find_definition(scope, bufnr, name, scoped) or nil
 			end
 		end
+	end
+	if not body then
+		body = find_definition(scope, bufnr, configured_dep_function(lines), scoped)
 	end
 	if not body then
 		return {}
