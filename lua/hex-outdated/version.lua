@@ -1,5 +1,15 @@
 local M = {}
 
+-- Elixir rejects a numeric identifier (core component or all-digit prerelease
+-- identifier) above 14 decimal digits; see Version.parse/1 in the Elixir
+-- standard library. `#n <= MAX_NUMERIC_DIGITS` is checked as a digit count,
+-- not a magnitude comparison, because tonumber() on a 15+ digit string goes
+-- through a double and loses exactness. Given leading zeros are rejected
+-- separately, digit count and magnitude coincide exactly: any string of
+-- MAX_NUMERIC_DIGITS digits or fewer is < 10^14, and any longer string
+-- without a leading zero is >= 10^14.
+local MAX_NUMERIC_DIGITS = 14
+
 --- Parse a version string into { major, minor, patch, pre, precision, raw } or nil.
 function M.parse(str)
 	if type(str) ~= "string" then
@@ -37,6 +47,9 @@ function M.parse(str)
 		if #n > 1 and n:sub(1, 1) == "0" then
 			return nil
 		end
+		if #n > MAX_NUMERIC_DIGITS then
+			return nil
+		end
 		parts[#parts + 1] = tonumber(n)
 	end
 	if #parts == 0 or #parts > 3 then
@@ -51,6 +64,9 @@ function M.parse(str)
 			end
 			if id:match("^%d+$") then
 				if #id > 1 and id:sub(1, 1) == "0" then
+					return nil
+				end
+				if #id > MAX_NUMERIC_DIGITS then
 					return nil
 				end
 			elseif not id:match("^[%a%d%-]+$") then

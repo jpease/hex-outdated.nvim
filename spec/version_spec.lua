@@ -38,6 +38,42 @@ describe("version.parse", function()
 	end)
 end)
 
+describe("version.parse numeric identifier digit limit", function()
+	-- Elixir 1.20.3 (OTP 29), verified 2026-08-12:
+	--   Version.parse("99999999999999.0.0")       -> {:ok, _}  (14 digits, accepted)
+	--   Version.parse("100000000000000.0.0")      -> :error    (15 digits, rejected)
+	--   Version.parse("1.0.0-99999999999999")     -> {:ok, _}  (14 digits, accepted)
+	--   Version.parse("1.0.0-100000000000000")    -> :error    (15 digits, rejected)
+	--   Version.parse("1.0.0+100000000000000")    -> {:ok, _}  (build metadata not numeric, unlimited)
+	--   Version.parse("1.0.0-abc100000000000000") -> {:ok, _}  (non-numeric prerelease id, unlimited)
+	it("accepts a 14-digit core numeric identifier (the exact boundary)", function()
+		assert.is_not_nil(version.parse("99999999999999.0.0"))
+	end)
+
+	it("rejects a 15-digit core numeric identifier", function()
+		assert.is_nil(version.parse("100000000000000.0.0"))
+	end)
+
+	it("accepts a 14-digit numeric prerelease identifier (the exact boundary)", function()
+		assert.is_not_nil(version.parse("1.0.0-99999999999999"))
+	end)
+
+	it("rejects a 15-digit numeric prerelease identifier", function()
+		assert.is_nil(version.parse("1.0.0-100000000000000"))
+	end)
+
+	it("does not apply the digit limit to build metadata (negative control)", function()
+		assert.is_not_nil(version.parse("1.0.0+100000000000000"))
+	end)
+
+	it(
+		"does not apply the digit limit to a non-numeric prerelease identifier (negative control)",
+		function()
+			assert.is_not_nil(version.parse("1.0.0-abc100000000000000"))
+		end
+	)
+end)
+
 describe("version.is_stable / tostring", function()
 	local p = version.parse
 	it("flags pre-releases as unstable", function()
@@ -58,6 +94,18 @@ describe("version.parse_requirement", function()
 		assert.is_nil(version.parse_requirement(">= 1.0.0 and < 2.0.0"))
 		assert.is_nil(version.parse_requirement("~> nonsense"))
 	end)
+
+	it(
+		"fails the whole requirement (not a silently-dropped operand) for an over-limit operand",
+		function()
+			-- 15-digit core identifier: Elixir rejects it (see the digit-limit tests
+			-- above), so M.parse returns nil for the operand and parse_requirement
+			-- must propagate that as a full failure rather than returning a
+			-- requirement with a missing/garbage version.
+			assert.is_nil(version.parse_requirement("~> 100000000000000.0.0"))
+			assert.is_nil(version.parse_requirement("== 1.0.0-100000000000000"))
+		end
+	)
 end)
 
 describe("version.compare", function()

@@ -108,6 +108,18 @@ describe("version.classify", function()
 		end
 	)
 
+	it(
+		"returns unknown for a requirement whose operand exceeds the 14-digit numeric limit",
+		function()
+			-- Elixir 1.20.3 rejects a 15-digit numeric identifier (see spec/version_spec.lua
+			-- for the reference output), so M.parse_requirement returns nil for this
+			-- requirement and classify must report "unknown", not a bogus comparison
+			-- against whatever `latest` happens to be in `published`.
+			local r = version.classify("~> 100000000000000.0.0", published)
+			assert.are.equal("unknown", r.status)
+		end
+	)
+
 	it("does not treat a prerelease of the ~> upper bound itself as satisfying", function()
 		-- req.version has a pre ("rc"), so the pool is all parsed versions (no stable
 		-- fallback needed here since there are no stables anyway). 3.0.0-rc.1 is the
