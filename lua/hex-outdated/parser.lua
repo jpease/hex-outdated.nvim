@@ -247,10 +247,12 @@ end
 -- `find_deps_pair_value` path instead.
 --
 -- `first`/`last` narrow the search to `project/0`'s own body when that body can
--- be located (see `locate_project`), so `deps: name()` text anywhere else in the
--- file — most importantly inside a string or docstring — can never redirect the
--- lookup. They default to the whole file, which is what callers pass when no
--- `project/0` is available to anchor on.
+-- be located (see `locate_project` for the fallback path; `parse_treesitter`
+-- derives the same window from the `project` node's own range), so
+-- `deps: name()` text anywhere else in the file — most importantly inside a
+-- string or docstring — can never redirect the lookup. They default to the
+-- whole file, which is what callers pass when no `project/0` is available to
+-- anchor on.
 local function configured_dep_function(lines, first, last)
 	local stripped = {}
 	for i = first or 1, last or #lines do
@@ -1026,7 +1028,20 @@ local function parse_treesitter(bufnr)
 		end
 	end
 	if not body then
-		body = find_definition(scope, bufnr, configured_dep_function(lines), scoped)
+		-- Narrow the text-based name guess to project/0's own body, exactly like
+		-- `M.parse_lines` narrows via `locate_project`'s line range — otherwise a
+		-- `deps: name()` fragment anywhere else in the file (a sibling function, a
+		-- @doc string, a module attribute) could hijack the guess. `project`'s own
+		-- node range is used rather than the unwrapped body: it is available
+		-- whether or not project/0 has a `do_block` (the one-line `def project,
+		-- do: ...` form has none), and including the `def project do` / `end`
+		-- lines is harmless since neither ever carries a `deps:` fragment.
+		local first, last
+		if project then
+			local start_row, _, end_row = project:range()
+			first, last = start_row + 1, end_row + 1
+		end
+		body = find_definition(scope, bufnr, configured_dep_function(lines, first, last), scoped)
 	end
 	if not body then
 		return {}

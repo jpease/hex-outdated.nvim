@@ -503,6 +503,63 @@ describe("parser (treesitter)", function()
 		eq(1, #result)
 		eq("real", result[1].name)
 	end)
+
+	it(
+		"does not let a sibling function's 'deps:' fragment redirect the dep-function guess (issue #65)",
+		function()
+			local mix_sibling_deps_fragment = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [app: :demo]",
+				"  end",
+				"",
+				"  defp other, do: [deps: other_deps()]",
+				"",
+				"  defp deps do",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp other_deps do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			}
+			local b = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_sibling_deps_fragment)
+			vim.bo[b].filetype = "elixir"
+			local result = parser.parse_buffer(b)
+			eq(1, #result)
+			eq("real", result[1].name)
+		end
+	)
+
+	it(
+		"does not let a 'deps:' fragment in a @doc string / attribute redirect the guess (issue #65)",
+		function()
+			local mix_doc_string_fragment = {
+				"defmodule Demo.MixProject do",
+				'  @source_url "deps: fake()"',
+				"",
+				"  def project do",
+				"    [app: :demo]",
+				"  end",
+				"",
+				'  @doc "deps: fake()"',
+				"  defp other, do: :ok",
+				"",
+				"  defp deps do",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"end",
+			}
+			local b = vim.api.nvim_create_buf(false, true)
+			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_doc_string_fragment)
+			vim.bo[b].filetype = "elixir"
+			local result = parser.parse_buffer(b)
+			eq(1, #result)
+			eq("real", result[1].name)
+		end
+	)
 end)
 
 -- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
@@ -869,6 +926,67 @@ describe("parser parity: treesitter vs fallback", function()
 				"  end",
 				"  defp project_deps do",
 				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- The Treesitter path's whole-file text guess for the dep-function name
+			-- (used when project/0's returned list has no resolvable `deps:` key)
+			-- must be scoped to project/0's own body, exactly like the fallback path
+			-- already is. Before the fix, this fragment inside a sibling function's
+			-- own `deps:` pair hijacked the guess and both paths disagreed.
+			desc = "sibling function's 'deps:' fragment does not redirect the guess (issue #65)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [app: :demo]",
+				"  end",
+				"",
+				"  defp other, do: [deps: other_deps()]",
+				"",
+				"  defp deps do",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp other_deps do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "'deps:' fragment in a @doc string does not redirect the guess (issue #65)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [app: :demo]",
+				"  end",
+				"",
+				'  @doc "deps: fake()"',
+				"  defp other, do: :ok",
+				"",
+				"  defp deps do",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "'deps:' fragment in a module attribute does not redirect the guess (issue #65)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				'  @source_url "deps: fake()"',
+				"",
+				"  def project do",
+				"    [app: :demo]",
+				"  end",
+				"",
+				"  defp deps do",
+				'    [{:real, "~> 1.0"}]',
 				"  end",
 				"end",
 			},
