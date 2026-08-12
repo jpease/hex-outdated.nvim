@@ -215,6 +215,142 @@ describe("actions.versions float", function()
 	end)
 end)
 
+describe("actions.versions stale results (issue #60)", function()
+	it("opens the picker from stale cached versions on a transient error", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep =
+			{ name = "jason", package = "jason", row = 0, col_start = 16, col_end = 22, op = "~>" }
+		actions.versions(buf, dep, function(_, cb)
+			cb({ error = "request timed out", stale = true, versions = { "2.0.0", "1.0.0" } })
+		end)
+
+		vim.wait(500, function()
+			return float_win() ~= nil
+		end, 5)
+
+		local win = float_win()
+		truthy(win, "versions float opened despite the transient error")
+		local fbuf = vim.api.nvim_win_get_buf(win)
+		local lines = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
+		eq(3, #lines, "header line plus the two cached versions")
+		eq(
+			{ "2.0.0", "1.0.0" },
+			{ lines[2], lines[3] },
+			"cached versions preserved after the header"
+		)
+		is_true(
+			lines[1] ~= "2.0.0" and lines[1] ~= "1.0.0",
+			"header row does not read as a version"
+		)
+		eq({ 2, 0 }, vim.api.nvim_win_get_cursor(win), "cursor starts on the first version row")
+		vim.api.nvim_win_close(win, true)
+	end)
+
+	it("notifies and opens no picker on an error with no usable versions", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local notified
+		local original_notify = vim.notify
+		vim.notify = function(msg)
+			notified = msg
+		end
+
+		actions.versions(buf, { name = "jason" }, function(_, cb)
+			cb({ error = "request timed out" })
+		end)
+
+		vim.notify = original_notify
+		contains(notified, "request timed out")
+		is_nil(float_win(), "no versions float opened")
+	end)
+
+	it("never reuses stale versions for a not_found (404) result", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local notified
+		local original_notify = vim.notify
+		vim.notify = function(msg)
+			notified = msg
+		end
+
+		actions.versions(buf, { name = "jason" }, function(_, cb)
+			cb({ error = "not found", not_found = true })
+		end)
+
+		vim.notify = original_notify
+		contains(notified, "not found")
+		is_nil(float_win(), "no versions float opened for a 404")
+	end)
+
+	it(
+		"rewrites the requirement from the stale list's first version row exactly as a fresh list would",
+		function()
+			local line = '      {:dep, "~> 1.0"},'
+			local buf = mix_buf(line)
+			local s = line:find('"')
+			local dep = {
+				name = "dep",
+				row = 0,
+				col_start = s,
+				col_end = s + #"~> 1.0",
+				requirement = "~> 1.0",
+				changedtick = vim.api.nvim_buf_get_changedtick(buf),
+				op = "~>",
+			}
+			vim.api.nvim_set_current_buf(buf)
+			actions.versions(buf, dep, function(_, cb)
+				cb({ error = "request timed out", stale = true, versions = { "2.0.0", "1.0.0" } })
+			end)
+
+			vim.wait(500, function()
+				return float_win() ~= nil
+			end, 5)
+			local win = float_win()
+			truthy(win, "versions float opened")
+			-- Cursor already parked on the first version row; select it directly.
+			vim.api.nvim_feedkeys(
+				vim.api.nvim_replace_termcodes("<cr>", true, false, true),
+				"x",
+				false
+			)
+
+			eq('      {:dep, "~> 2.0"},', vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1])
+		end
+	)
+
+	it("does nothing when <CR> is pressed on the stale header row", function()
+		local line = '      {:dep, "~> 1.0"},'
+		local buf = mix_buf(line)
+		local s = line:find('"')
+		local dep = {
+			name = "dep",
+			row = 0,
+			col_start = s,
+			col_end = s + #"~> 1.0",
+			requirement = "~> 1.0",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			op = "~>",
+		}
+		vim.api.nvim_set_current_buf(buf)
+		actions.versions(buf, dep, function(_, cb)
+			cb({ error = "request timed out", stale = true, versions = { "2.0.0", "1.0.0" } })
+		end)
+
+		vim.wait(500, function()
+			return float_win() ~= nil
+		end, 5)
+		local win = float_win()
+		truthy(win, "versions float opened")
+		vim.api.nvim_win_set_cursor(win, { 1, 0 })
+		vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<cr>", true, false, true), "x", false)
+
+		truthy(vim.api.nvim_win_is_valid(win), "float stays open when <CR> hits the header")
+		eq(line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "buffer unchanged")
+		vim.api.nvim_win_close(win, true)
+	end)
+end)
+
 describe("actions.versions prerelease selection", function()
 	it("inserts the full prerelease version string under a pessimistic operator", function()
 		local line = '      {:dep, "~> 1.0"},'

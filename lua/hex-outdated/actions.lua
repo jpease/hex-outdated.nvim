@@ -242,6 +242,11 @@ local function open_cursor_float(lines, opts)
 	return win, buf
 end
 
+-- Non-selectable first line shown when the list comes from a transient error's
+-- retained last-known-good versions (see hex_api.deliver). It deliberately
+-- cannot parse as a version so it never collides with a real release string.
+local STALE_HEADER = "-- cached (offline) --"
+
 --- Open a floating window listing published versions for the dep; selecting one
 --- (Enter) inserts it into the requirement; `q`/<Esc> closes.
 --- `fetch(name, cb)` is injected by the caller (wraps hex_api.get_package).
@@ -253,7 +258,12 @@ function M.versions(bufnr, dep, fetch)
 	local origin_win = vim.api.nvim_get_current_win()
 	local origin_cursor = vim.api.nvim_win_get_cursor(origin_win)
 	fetch(package_name(dep), function(res)
-		if res.error or not res.versions or #res.versions == 0 then
+		local versions = res.versions
+		-- Match core's contract: a transient error still carrying usable versions
+		-- (hex_api.deliver's stale carry-over) is browsable, not terminal. Only a
+		-- result with nothing usable — a hard error, a 404 (deliver never attaches
+		-- stale data to those), or all-retired — bails out here.
+		if not (versions and #versions > 0) then
 			local msg = res.error
 				or (res.all_retired and "no active versions found (all releases are retired)")
 				or "no versions found"
@@ -264,7 +274,17 @@ function M.versions(bufnr, dep, fetch)
 			if not context_is_current(origin_win, bufnr, origin_cursor) then
 				return
 			end
-			local lines = res.versions -- newest-first per hex.pm ordering
+			-- An error alongside usable versions only happens via the stale
+			-- carry-over path, so res.error (not res.stale) is the source of truth
+			-- for whether to warn the user the list may be out of date.
+			local stale = res.error ~= nil
+			local lines = versions -- newest-first per hex.pm ordering
+			if stale then
+				lines = { STALE_HEADER }
+				for _, v in ipairs(versions) do
+					lines[#lines + 1] = v
+				end
+			end
 			local win, buf = open_cursor_float(lines, {
 				filetype = "hex-outdated-versions",
 				enter = true, -- focus the picker so the user can move + select
@@ -276,6 +296,11 @@ function M.versions(bufnr, dep, fetch)
 			end
 			-- Highlight the active row so the selection target is obvious.
 			vim.wo[win].cursorline = true
+			local first_version_row = stale and 2 or 1
+			if stale then
+				-- Keep the common path (selecting a version) unaffected by the header.
+				vim.api.nvim_win_set_cursor(win, { first_version_row, 0 })
+			end
 			local function close()
 				if vim.api.nvim_win_is_valid(win) then
 					vim.api.nvim_win_close(win, true)
@@ -284,6 +309,9 @@ function M.versions(bufnr, dep, fetch)
 			vim.keymap.set("n", "q", close, { buffer = buf, nowait = true })
 			vim.keymap.set("n", "<esc>", close, { buffer = buf, nowait = true })
 			vim.keymap.set("n", "<cr>", function()
+				if stale and vim.api.nvim_win_get_cursor(win)[1] < first_version_row then
+					return -- header row: not a version, no-op
+				end
 				local selected = vim.api.nvim_get_current_line()
 				close()
 				if vim.api.nvim_buf_is_valid(bufnr) then
