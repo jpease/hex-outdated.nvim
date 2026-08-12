@@ -126,13 +126,41 @@ end
 
 -- Count block-closing `end` keywords in `code`, as whole tokens, applying the
 -- same string masking and bare-atom (`:end` / `end:`) exclusions `count_openers`
--- applies to `do`. Paired with `count_openers` by `module_ranges` below to find
--- where each `defmodule` block starts and ends. The dep-function scanners
--- elsewhere in this file use a stricter "`end` alone on its line" test instead,
--- because they only ever need to close the one block they are already inside.
+-- applies to `do`. Paired with `count_openers` by `module_ranges` below, and by
+-- `block_delta` below that, to track nested-block depth via each line's net
+-- opener/closer delta.
 local function count_closers(code)
 	local masked = mask_strings(code)
 	return count_keyword(masked, "end", not_bare_atom_or_keyword_form)
+end
+
+-- Apply one line's net opener/closer delta (`count_openers` minus `count_closers`)
+-- to `depth`, the running nesting depth inside a block being scanned line-by-line,
+-- where 0 means "directly in the block's own body" (the block's own head line,
+-- e.g. `defp deps do`, is never passed here — see each caller's own
+-- "just activated" guard). Returns the updated depth and whether this line's
+-- delta would drive it below zero, i.e. this line carries the tracked block's
+-- own closing `end`, however it is decorated: `end)`, `end,`, a same-line
+-- `fn ... end` (net zero, so not a close), multiple closers on one line, or a
+-- bare `end` line (net -1).
+--
+-- Net-per-line, not token-order-aware within the line: a line that both closes
+-- and opens (`end) |> case do`) is resolved by summing, not by the order the
+-- tokens appear in. This is sound for real mix.exs input because nothing
+-- meaningful can follow a def's own closing `end` on the same physical line in
+-- valid Elixir — that `end` closes the def itself, so no further token can be
+-- attached to it as a continuation of the same statement. Order therefore only
+-- matters for contrived, not realistic, same-line mixes, and is intentionally
+-- left unhandled (see issue #63's discussion of this tradeoff).
+--
+-- Shared by `locate_project`, `returned_variable`, and `M.parse_lines` so the
+-- three scanners cannot drift out of sync with each other again (#63); each
+-- keeps its own action on close, since a returned range, a returned value, and
+-- a flag flip are not interchangeable.
+local function block_delta(depth, code)
+	local net = count_openers(code) - count_closers(code)
+	local new_depth = depth + net
+	return new_depth, new_depth < 0
 end
 
 -- Line ranges of every `defmodule ... do ... end` block in the file, as
@@ -301,14 +329,13 @@ local function locate_project(lines)
 			local block_depth = 0
 			for j = i + 1, #lines do
 				local code = strip_comment(lines[j])
-				if code:match("^%s*end%s*$") then
-					if block_depth == 0 then
-						return i, i + 1, j - 1
-					end
-					block_depth = block_depth - 1
-				else
-					block_depth = block_depth + count_openers(code)
+				local new_depth, closed = block_delta(block_depth, code)
+				if closed then
+					-- The body excludes the line carrying the closing token, even when
+					-- that token is decorated (`end)`) rather than a bare `end` line.
+					return i, i + 1, j - 1
 				end
+				block_depth = new_depth
 			end
 			return i, i + 1, #lines
 		end
@@ -342,13 +369,12 @@ local function returned_variable(lines, dep_function, scope)
 					active, last_expr, block_depth = true, nil, 0
 				end
 			end
-		elseif code:match("^%s*end%s*$") then
-			if block_depth == 0 then
+		else
+			local new_depth, closed = block_delta(block_depth, code)
+			if closed then
 				return last_expr and last_expr:match("^%s*([%a_][%w_]*)%s*$") or nil
 			end
-			block_depth = block_depth - 1
-		else
-			block_depth = block_depth + count_openers(code)
+			block_depth = new_depth
 			if code:match("%S") then
 				last_expr = code
 			end
@@ -575,7 +601,6 @@ function M.parse_lines(lines)
 	local match_head = new_head_matcher(dep_function)
 	for i, line in ipairs(lines) do
 		local code = strip_comment(line)
-		local just_activated = false
 		if not active then
 			if in_scope(scope, i) then
 				function_indent, one_line = match_head(code)
@@ -585,17 +610,14 @@ function M.parse_lines(lines)
 				brackets = new_bracket_state(returned_var)
 				pending = nil
 				block_depth = 0
-				just_activated = true
 			end
-		elseif code:match("^%s*end%s*$") then
-			if block_depth == 0 then
+		else
+			local new_depth, closed = block_delta(block_depth, code)
+			if closed then
 				active = false
 			else
-				block_depth = block_depth - 1
+				block_depth = new_depth
 			end
-		end
-		if active and not just_activated then
-			block_depth = block_depth + count_openers(code)
 		end
 		if active then
 			-- Per-line reset of the string scan; the bracket stack and last_sig

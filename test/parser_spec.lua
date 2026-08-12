@@ -160,6 +160,49 @@ describe("parser fallback", function()
 		eq(1, #deps)
 		eq("only_dep", deps[1].name)
 	end)
+
+	-- `locate_project` (added by #61) carried the identical whole-line-close
+	-- asymmetry the other two sites had: its close test was also the
+	-- `^%s*end%s*$` whole-line match. Here `project/0`'s body over-extended
+	-- past its own `end)`, swallowing `defp other`, whose `deps:
+	-- other_deps()` then hijacked `configured_dep_function`'s narrowed
+	-- search window -- even though `project/0` has no `deps:` key of its own
+	-- and the correct dep function is the default `deps/0`.
+	--
+	-- This is fallback-only rather than a treesitter/fallback parity case:
+	-- `locate_project` is a fallback-parser-only function (`parse_treesitter`
+	-- never calls it), and this exact input also happens to trip an
+	-- unrelated, pre-existing scoping gap in `parse_treesitter`'s own
+	-- `configured_dep_function(lines)` call (it searches the whole file for
+	-- `deps: name()` text with no first/last narrowing, unlike the fallback's
+	-- call), so treesitter independently returns "wrong" for reasons
+	-- unconnected to any of #63's three call sites. See the report to the
+	-- issue author.
+	it("does not let 'end)' desync locate_project's body range (issue #63)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project do",
+			"    _ = Enum.map([], fn x ->",
+			"      x",
+			"    end)",
+			"",
+			"    [app: :demo]",
+			"  end",
+			"",
+			"  defp other, do: [deps: other_deps()]",
+			"",
+			"  defp deps do",
+			'    [{:real, "~> 1.0"}]',
+			"  end",
+			"",
+			"  defp other_deps do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+		eq(1, #deps)
+		eq("real", deps[1].name)
+	end)
 end)
 
 local MIX = {
@@ -955,6 +998,116 @@ describe("parser parity: treesitter vs fallback", function()
 				"    end",
 				"",
 				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- The issue's own reproduction: a nested anonymous function passed to a
+			-- call closes as `end)`, which the old whole-line `^%s*end%s*$` close
+			-- test never recognized. The opener stayed on the books, so the dep
+			-- function's own closing `end` merely decremented a phantom depth
+			-- instead of ending the scan, and extraction leaked into `unrelated`.
+			desc = "nested 'fn ... end)' inside the dep function body balances (issue #63)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    _ = Enum.map([], fn x ->",
+				"      x",
+				"    end)",
+				"",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- A closer followed by a delimiter other than `)`: an `if ... do` block
+			-- as a list element, closed by `end,` ahead of the next element. The old
+			-- whole-line close test missed this exactly as it missed `end)`.
+			desc = "closer followed by a delimiter ('end,') balances (issue #63)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    _ = [",
+				"      if Mix.env() == :test do",
+				"        :ok",
+				"      end,",
+				"      :ready",
+				"    ]",
+				"",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- Same-line opener/closer form, net-neutral: `fn x -> x end` opens and
+			-- closes on one line inside a call. The old scheme counted the opener
+			-- (anywhere-on-line) but never the closer (whole-line only), so the net
+			-- effect was a phantom +1 instead of the correct 0.
+			desc = "same-line 'fn x -> x end' inside a call is net-neutral (issue #63)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    _ = Enum.map([], fn x -> x end)",
+				"",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- Same-line opener/closer form inside a keyword list: `fn -> :ok end`
+			-- as a keyword value, followed by a sibling key on the same line. As
+			-- with the call form above, this must be net-neutral.
+			desc = "keyword list with inline 'fn -> ... end' is net-neutral (issue #63)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    opts = [callback: fn -> :ok end, timeout: 5]",
+				"    _ = opts",
+				"",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- Multiple closers on one line: two nested anonymous functions closing
+			-- back to back (`end) end)`). Both must be counted, not just one.
+			desc = "multiple closers on one line are all counted (issue #63)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    _ = Enum.map([[1]], fn a -> Enum.map(a, fn b -> b end) end)",
+				"",
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
 				"  end",
 				"end",
 			},

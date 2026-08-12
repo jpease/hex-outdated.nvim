@@ -579,6 +579,92 @@ describe("parser.parse_lines (fallback)", function()
 			assert.are.equal("jason", deps[1].name)
 		end
 	)
+
+	-- #63's net-delta close condition scans for "end" through the same
+	-- underscore-aware token scanner "do"/"fn" already use (#58's
+	-- `count_closers`). These four guard the same boundary/atom exclusions
+	-- extended to the new close-detection path: if any of them regressed to
+	-- a naive `%f[%w]end%f[%W]` scan, the line below would be misread as the
+	-- dep function's own closing token and the scan would stop before ever
+	-- reaching the real dep list.
+	it("does not treat 'end_of_list' as a block closer (issue #63)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  end_of_list = :marker",
+			"  _ = end_of_list",
+			"",
+			'  [{:real, "~> 1.0"}]',
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat 'the_end' as a block closer (issue #63)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  the_end = true",
+			"  _ = the_end",
+			"",
+			'  [{:real, "~> 1.0"}]',
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat a bare ':end' atom as a block closer (issue #63)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  status = :end",
+			"  _ = status",
+			"",
+			'  [{:real, "~> 1.0"}]',
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not treat an 'end:' keyword-list key as a block closer (issue #63)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  opts = [end: 1]",
+			"  _ = opts",
+			"",
+			'  [{:real, "~> 1.0"}]',
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	-- `returned_variable` is exercised separately from `parse_lines`'s own
+	-- close condition: it scans the dep function's body for a trailing bare
+	-- identifier so `deps = [...]; deps` is recognized as the real dep list
+	-- rather than excluded as a plain assignment RHS. Before #63, a nested
+	-- `fn ... end)` between the assignment and the final `deps` line left its
+	-- own `block_depth` one too high, so its close check never fired within
+	-- the function body; the module-less input below has no further `end` to
+	-- coincidentally rescue it, so `returned_variable` fell through to `nil`
+	-- and the assignment was wrongly excluded, losing the dep list entirely.
+	it("balances a nested 'fn ... end)' before the returned variable (issue #63)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  deps = [",
+			'    {:real, "~> 1.0"}',
+			"  ]",
+			"",
+			"  _ = Enum.map([], fn x ->",
+			"    x",
+			"  end)",
+			"",
+			"  deps",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()
