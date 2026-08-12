@@ -1230,6 +1230,167 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			-- The heredoc body's own `do` incremented the fallback's block_depth,
+			-- so the dep function's own `end` canceled the phantom depth instead
+			-- of ending the scan, and `unrelated`'s tuple leaked through.
+			desc = "block keyword inside a heredoc body is inert (issue #64, repro A)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				'    _doc = """',
+				"    case x do",
+				'    """',
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- Already fixed by #61's project/0 narrowing (the fragment never
+			-- reaches configured_dep_function's search window). Kept as a
+			-- regression pin, not evidence of new heredoc work.
+			desc = "'deps:' fragment inside a module-level heredoc ignored (issue #64, repro B)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				'  @moduledoc """',
+				"  example deps: fake()",
+				'  """',
+				"  def project, do: [deps: deps()]",
+				'  defp deps, do: [{:real, "~> 2.0"}]',
+				"end",
+			},
+		},
+		{
+			-- A bare `end` inside a heredoc body used to be worse than repro A:
+			-- it drove block_depth negative, so the fallback's own close check
+			-- fired on the heredoc body line and the real dep list was never
+			-- reached at all (`[]`, not just `[real, wrong]`).
+			desc = "'end' inside a heredoc body is inert (issue #64, repro C)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				'    _doc = """',
+				"    end",
+				'    """',
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "'#' inside a heredoc body is inert (issue #64)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				'    _doc = """',
+				"    # not a comment",
+				'    """',
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "unmatched '\"' inside a heredoc body is inert (issue #64)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				'    _doc = """',
+				'    say " here',
+				'    """',
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- Unlike A/C above, a stray `[` inside a heredoc body doesn't merely
+			-- shift block depth -- it opens a phantom bracket that the fallback's
+			-- assignment-RHS tracker never sees close, so the real dep list is
+			-- classified as nested inside it and dropped entirely (`[]`).
+			desc = "'[' inside a heredoc body is inert (issue #64)",
+			expect = { "real" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  defp deps do",
+				'    _doc = """',
+				"    x = [",
+				'    """',
+				'    [{:real, "~> 1.0"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:wrong, "~> 2.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			-- The case #61's narrowing does not defeat: the heredoc sits inside
+			-- project/0's own body, so the `deps: fake()` fragment is inside
+			-- configured_dep_function's search window regardless of scoping.
+			desc = "heredoc inside project/0's own body does not defeat dep-function scoping"
+				.. " (issue #64, repro G)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				'    _doc = """',
+				"    example deps: fake()",
+				'    """',
+				"    [deps: deps()]",
+				"  end",
+				'  defp deps, do: [{:real, "~> 2.0"}]',
+				"end",
+			},
+		},
+		{
+			-- Unlike repro G above, project/0 here declares no `deps:` key at
+			-- all, so Treesitter's AST chain never resolves a body and falls
+			-- through to `configured_dep_function`'s raw-line text guess over
+			-- project/0's own window -- the same window as G, but reached by a
+			-- different route. Before masking that fallback's `lines` too, the
+			-- heredoc's `deps: fake()` text hijacked the guess on the
+			-- Treesitter path only: treesitter returned `[]` while the (already
+			-- masked) fallback correctly defaulted to `deps/0` and returned
+			-- `[real]`.
+			desc = "heredoc inside project/0's body does not hijack the Treesitter text-guess "
+				.. "fallback when project/0 has no 'deps:' key (issue #64)",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				'    _doc = """',
+				"    example deps: fake()",
+				'    """',
+				"    [app: :demo]",
+				"  end",
+				'  defp deps, do: [{:real, "~> 2.0"}]',
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is

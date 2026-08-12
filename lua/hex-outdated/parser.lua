@@ -30,15 +30,120 @@ local function strip_comment(line)
 	return line
 end
 
+-- Cross-line state that lets the per-line scanners below (`strip_comment`,
+-- `mask_strings`, `advance_brackets`, and the block-depth accounting built on
+-- top of them) treat a heredoc's entire body as inert, rather than as
+-- executable code. `mask_heredocs` is the single place that decides what is
+-- and is not inside a heredoc; `M.parse_lines` computes it once and threads
+-- the result through every scanner that would otherwise see raw `lines`, so
+-- they cannot drift out of sync the way three independent block-depth
+-- trackers did before #63.
+
+-- True when `text`, scanned with the same in_string/escaped double-quote
+-- convention `strip_comment` uses, ends inside an open ordinary string
+-- literal. Used by `heredoc_opener` below so a triple-quote that is actually
+-- part of an ordinary string's escaped text (`x = "say \"\"\" here"`) is never
+-- mistaken for a heredoc opener. Only tracks `"`, matching every other
+-- per-line scanner in this file; unbalanced single-quote text ahead of a
+-- `'''` opener is not specially guarded against, since charlists are not
+-- string-scanned anywhere else in this file either.
+local function ends_inside_string(text)
+	local in_string, escaped = false, false
+	for i = 1, #text do
+		local char = text:sub(i, i)
+		if escaped then
+			escaped = false
+		elseif char == "\\" and in_string then
+			escaped = true
+		elseif char == '"' then
+			in_string = not in_string
+		end
+	end
+	return in_string
+end
+
+-- The heredoc delimiter opened by `code`, or nil. `"""` opens a string
+-- heredoc and `'''` opens a charlist heredoc; both remain valid Elixir syntax
+-- through at least 1.20. A candidate delimiter opens a heredoc only when
+-- nothing but whitespace follows it to end of line (the real Elixir rule) and
+-- it is not itself sitting inside an ordinary double-quoted string opened
+-- earlier on the same line (`ends_inside_string`). Together these also
+-- correctly reject a single-line `"""a"""`: its first `"""` has trailing
+-- non-whitespace text (`a"""`), and its second `"""` sits inside the "string"
+-- the first one opened. A sigil prefix (`~s"""`, `~S"""`, or any other
+-- `~<letter>"""`) needs no special-casing: the sigil is just ordinary text
+-- ahead of the delimiter and does not affect either check, so every
+-- sigil-prefixed heredoc opener is already covered by this same rule.
+local function heredoc_opener(code)
+	for _, delim in ipairs({ '"""', "'''" }) do
+		local pos = 1
+		while true do
+			local s, e = code:find(delim, pos, true)
+			if not s then
+				break
+			end
+			if code:sub(e + 1):match("^%s*$") and not ends_inside_string(code:sub(1, s - 1)) then
+				return delim
+			end
+			pos = s + 1
+		end
+	end
+	return nil
+end
+
+-- Neutralise heredoc bodies across the whole file in one pass, returning a NEW
+-- array of the same length as `lines` (so every line's index — and every
+-- `row`/line-range value derived from it downstream — is unaffected).
+--
+--   - The opener line is returned unchanged. Everything up to the opening
+--     delimiter is ordinary code (kept verbatim, so a dep tuple sharing the
+--     line keeps its exact columns), and everything after it is, by
+--     `heredoc_opener`'s own rule, pure trailing whitespace — masking it
+--     would be a no-op.
+--   - Body lines become empty strings. A heredoc body can never legitimately
+--     contain a dep tuple, so blanking it cannot lose a real dependency, and
+--     an empty line is inert to every scanner below: no `do`/`fn`/`end`, no
+--     `#`, no unmatched `"`, no `[`/`]`.
+--   - The closing line has its leading whitespace and the delimiter itself
+--     replaced with spaces of the same length, preserving the column
+--     positions of whatever legitimately follows on the same physical line
+--     (Elixir resumes ordinary tokenizing immediately after a heredoc's
+--     closing delimiter, e.g. `""" <> "y"` or `""")`).
+--
+-- An unterminated heredoc (no matching closer before end of file) masks every
+-- remaining line to end of file; real Elixir would fail to compile such a
+-- file at all, so there is no "real" behavior to preserve past that point.
+local function mask_heredocs(lines)
+	local masked = {}
+	local delim
+	for i, line in ipairs(lines) do
+		if delim then
+			local prefix, tail = line:match("^(%s*" .. delim .. ")(.*)$")
+			if prefix then
+				masked[i] = string.rep(" ", #prefix) .. tail
+				delim = nil
+			else
+				masked[i] = ""
+			end
+		else
+			masked[i] = line
+			delim = heredoc_opener(line)
+		end
+	end
+	return masked
+end
+
 -- Replace the contents of double-quoted string literals in `code` with spaces,
 -- preserving length (and the quotes themselves) so column offsets elsewhere
 -- stay meaningful. Used by `count_openers` below so a "do" or "fn" inside a
 -- string's text (e.g. a SemVer pre-release tag like "== 1.0.0-do") is never
 -- mistaken for a block-opening keyword. Uses the same in_string/escaped
 -- string-scan convention as `strip_comment` and `advance_brackets`. Like both
--- of those, this scans one physical line at a time and does not track
--- multi-line heredocs (`"""..."""` spanning lines) — a pre-existing
--- limitation, not new here.
+-- of those, this scans one physical line at a time; multi-line heredocs are
+-- handled upstream by `mask_heredocs`, whose output is what every caller in
+-- this file actually scans, so a line reaching this function either isn't
+-- part of a heredoc or has already been neutralised to whitespace / an empty
+-- string.
 local function mask_strings(code)
 	local out = {}
 	local in_string = false
@@ -587,13 +692,18 @@ end
 --- Returns a list of dep tables with 0-indexed `row`, `col_start`, `col_end`.
 function M.parse_lines(lines)
 	local deps = {}
+	-- Neutralise heredoc bodies once, up front, and scan `masked` (not `lines`)
+	-- from here on. `masked` has the same length and line indices as `lines`
+	-- (see `mask_heredocs`), so every `row`/line-range value computed below
+	-- still refers to the correct original line.
+	local masked = mask_heredocs(lines)
 	-- Anchor discovery on `project/0`: its body names the dep function, and its
 	-- module bounds where that function may be defined. When `project/0` cannot be
 	-- located both narrowings fall away and the scan behaves exactly as before.
-	local project_line, project_first, project_last = locate_project(lines)
-	local dep_function = configured_dep_function(lines, project_first, project_last)
-	local scope = project_line and module_scope(lines, project_line) or nil
-	local returned_var = returned_variable(lines, dep_function, scope)
+	local project_line, project_first, project_last = locate_project(masked)
+	local dep_function = configured_dep_function(masked, project_first, project_last)
+	local scope = project_line and module_scope(masked, project_line) or nil
+	local returned_var = returned_variable(masked, dep_function, scope)
 	local active = false
 	local function_indent
 	local one_line = false
@@ -601,7 +711,7 @@ function M.parse_lines(lines)
 	local pending
 	local block_depth
 	local match_head = new_head_matcher(dep_function)
-	for i, line in ipairs(lines) do
+	for i, line in ipairs(masked) do
 		local code = strip_comment(line)
 		if not active then
 			if in_scope(scope, i) then
@@ -736,7 +846,7 @@ function M.parse_lines(lines)
 		end
 	end
 	if #deps == 0 then
-		local inline = parse_inline_deps(lines, scope)
+		local inline = parse_inline_deps(masked, scope)
 		if #inline > 0 then
 			return inline
 		end
@@ -1041,7 +1151,22 @@ local function parse_treesitter(bufnr)
 			local start_row, _, end_row = project:range()
 			first, last = start_row + 1, end_row + 1
 		end
-		body = find_definition(scope, bufnr, configured_dep_function(lines, first, last), scoped)
+		-- This branch is a raw-line regex text guess, not AST navigation, so it
+		-- has no more concept of a heredoc than the fallback parser's own
+		-- `configured_dep_function` call does -- and it is reachable on
+		-- well-formed input: whenever project/0 declares no `deps:` key at all
+		-- (so the AST chain above never runs), a heredoc anywhere in
+		-- project/0's body (e.g. a `@doc`-style example containing literal
+		-- `deps: fake()` text) can hijack this text search exactly as it can
+		-- hijack the fallback's, and the fallback path is masked. Mask `lines`
+		-- here too so the two paths cannot disagree; `lines` is used nowhere
+		-- else in this function, so the change is contained to this one call.
+		body = find_definition(
+			scope,
+			bufnr,
+			configured_dep_function(mask_heredocs(lines), first, last),
+			scoped
+		)
 	end
 	if not body then
 		return {}

@@ -665,6 +665,94 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal(1, #deps)
 		assert.are.equal("real", deps[1].name)
 	end)
+
+	-- Fallback-only heredoc edge cases (issue #64). Parity cases (both paths
+	-- must agree) live in test/parser_spec.lua's parity CASES table instead.
+	it("does not open heredoc mode for a single-line triple-quoted string (issue #64)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    _doc = """a"""',
+			'    [{:real, "~> 1.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("treats a '\\'\\'\\'' charlist heredoc body as inert (issue #64)", function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			"    _doc = '''",
+			"    case x do",
+			"    '''",
+			'    [{:real, "~> 1.0"}]',
+			"  end",
+			"",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it('treats a \'~s"""\' sigil-prefixed heredoc opener as a heredoc (issue #64)', function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    _doc = ~s"""',
+			"    case x do",
+			'    """',
+			'    [{:real, "~> 1.0"}]',
+			"  end",
+			"",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it('treats a \'~S"""\' sigil-prefixed heredoc opener as a heredoc (issue #64)', function()
+		local deps = parser.parse_lines({
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			'    _doc = ~S"""',
+			"    end",
+			'    """',
+			'    [{:real, "~> 1.0"}]',
+			"  end",
+			"",
+			"  defp unrelated do",
+			'    [{:wrong, "~> 2.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("real", deps[1].name)
+	end)
+
+	it("does not let a heredoc body confuse the returned-variable scan (issue #64)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  deps = [",
+			'    {:jason, "~> 1.0"}',
+			"  ]",
+			'  _doc = """',
+			"  case x do",
+			'  """',
+			"  deps",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()
