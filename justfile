@@ -27,6 +27,17 @@ check-fast: fmt-check lint
 check: check-fast test test-nvim
     [ -f .raven/git-hooks/lib/with-verified-cache.sh ] && sh .raven/git-hooks/lib/with-verified-cache.sh check true || true
 
+# Report known advisories in dependency manifests -- a no-op for this template.
+#
+# Raven standardizes `just audit` on osv-scanner, which reads lockfiles for npm,
+# PyPI, crates.io, Go, Hex, Maven and others, but has no Lua input at all:
+# LuaRocks rockspecs are not one of its scan targets. The recipe still exists so
+# `just audit` means the same thing in every Raven template, and so the gap is
+# stated out loud rather than reported as a clean scan.
+audit:
+    @echo "No dependency audit for Lua: osv-scanner reads no LuaRocks manifest."
+    @echo "Rock dependencies are NOT covered by 'just audit' -- treat this as a known gap."
+
 # List open issues with hierarchy and priority
 list-open:
     ./scripts/list_open_issues.py
