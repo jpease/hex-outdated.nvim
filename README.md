@@ -5,9 +5,10 @@
 [![Neovim](https://img.shields.io/badge/Neovim-0.10%2B-57A143?logo=neovim&logoColor=white)](https://neovim.io)
 
 Live "are my Hex deps up to date?" feedback for Elixir `mix.exs`, in the spirit
-of crates.nvim. As you edit `mix.exs`, each dependency's declared version
-requirement is checked against hex.pm: inline virtual text shows the latest
-version and status, and non-existent versions/packages surface as diagnostics.
+of crates.nvim. As you edit `mix.exs`, the plugin checks each dependency's
+declared version requirement against hex.pm: inline virtual text shows the
+latest version and status, and non-existent versions/packages show up as
+diagnostics.
 
 ![hex-outdated.nvim showing inline version status in a mix.exs buffer](assets/demo.gif)
 
@@ -15,19 +16,19 @@ version and status, and non-existent versions/packages surface as diagnostics.
 
 - Live inline virtual text as you edit `mix.exs` — no `:command` needed
 - Status at a glance: up to date, upgradable, outdated pin, or non-existent
-- Non-existent versions/packages also surface as real `vim.diagnostic` entries
+- Non-existent versions/packages also show up as real `vim.diagnostic` entries
 - One-key actions: upgrade the requirement under the cursor, browse published
   versions, or open the package on hex.pm
 - Treesitter parsing with a dependency-free Lua-pattern fallback
-- Reads `mix.exs` directly — no `mix.lock` and no shelling out to `mix`
+- Status comes from `mix.exs` alone — no shelling out to `mix`
 - Async, cached hex.pm requests; configurable text, highlights, and keymaps
 
 ## Requirements
 
 - Neovim 0.10+
 - `curl` on `PATH`
-- (Recommended) the `elixir` Treesitter parser (`:TSInstall elixir`); a
-  Lua-pattern fallback is used if it is missing.
+- (Recommended) the `elixir` Treesitter parser (`:TSInstall elixir`); without
+  it, the plugin falls back to Lua patterns.
 
 ## Install
 
@@ -87,7 +88,8 @@ Every manager other than lazy.nvim's `opts = {}` needs an explicit
 
 Open a `mix.exs` — status appears automatically and updates as you type.
 
-`:HexOutdated {refresh|toggle|upgrade|versions|open}` (bare `:HexOutdated` = refresh)
+`:HexOutdated {refresh|toggle|upgrade|versions|open|info|lock}`
+(bare `:HexOutdated` = refresh)
 
 | Subcommand | Action |
 |---|---|
@@ -99,7 +101,7 @@ Open a `mix.exs` — status appears automatically and updates as you type.
 | `info`     | Floating detail view (requirement / locked / latest) for the dependency under the cursor. |
 | `lock`     | Toggle the per-buffer lock lens — a `locked X · latest Y` line under each dependency. |
 
-The same actions are exposed as functions so you can bind your own keys:
+The same actions are also plain functions, so you can bind your own keys:
 
 ```lua
 local hex = require("hex-outdated")
@@ -110,8 +112,8 @@ local hex = require("hex-outdated")
 Selecting a release from `versions` preserves the current requirement
 operator: comparison requirements stay comparisons, bare exact versions stay
 bare, and `~>` keeps its existing precision (with full prerelease versions
-preserved). Retired Hex releases are excluded from status calculations and the
-popup.
+preserved). The plugin excludes retired Hex releases from status calculations
+and the popup.
 
 ## Status meanings
 
@@ -122,13 +124,13 @@ popup.
 | `outdated`   | An exact pin (`==`) that is below the latest release. |
 | `invalid`    | No published version matches the requirement (also a diagnostic). |
 
-Git/path deps and requirements the plugin can't analyze (combined `and`/`or`
-clauses) are left unannotated.
+The plugin leaves Git/path deps unannotated, along with requirements it can't
+analyze (combined `and`/`or` clauses).
 
 ## Lock context (optional)
 
 By default hex-outdated reads only `mix.exs`. When a `mix.lock` is present it can
-also surface what's actually locked — kept secondary so the inline requirement
+also show what's actually locked — kept secondary so the inline requirement
 status stays primary:
 
 - **Detail float** — `:HexOutdated info` (or press `K` on a dependency line)
@@ -164,7 +166,7 @@ require("hex-outdated").setup({
   },
   lock = {
     enabled = true,            -- read mix.lock when present
-    lens = false,              -- show the locked-version lens by default
+    lens = false,              -- locked-version lens; off by default
     stale_diagnostic = true,   -- warn when the lock no longer satisfies the requirement
   },
   text = {                   -- %s is the latest version
@@ -200,17 +202,17 @@ if you define them first: `HexOutdatedUpToDate`, `HexOutdatedUpgradable`,
 
 ## How it works
 
-`mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find dependency
-tuples inside the function referenced by the project's `deps:` setting
-(`deps/0` by default). Hex package aliases such as
-`{:local_app, "~> 2.0", hex: :actual_package}` are honored for API lookups while
-the local application name remains associated with `mix.lock`. For each Hex
-dependency the plugin asynchronously queries
+hex-outdated parses `mix.exs` with Treesitter (Lua-pattern fallback) to find
+dependency tuples inside the function referenced by the project's `deps:`
+setting (`deps/0` by default). A Hex package alias such as
+`{:local_app, "~> 2.0", hex: :actual_package}` points the API lookup at the
+real package, while the local application name still keys into `mix.lock`. For
+each Hex dependency the plugin asynchronously queries
 `https://hex.pm/api/packages/:name` (cached), excludes retired releases, then
 compares your requirement against the active published versions using Hex
-prerelease semantics. The requirement status comes from `mix.exs` alone;
-`mix.lock` is read locally only for the optional lock context above. There is no
-shelling out to `mix`.
+prerelease semantics. The requirement status comes from `mix.exs` alone; the
+plugin reads `mix.lock` locally, and only for the optional lock context above.
+There is no shelling out to `mix`.
 
 ## Development
 
@@ -222,16 +224,16 @@ just format    # stylua
 just lint      # luacheck
 ```
 
-Pure logic (`version`, the fallback parser, `util`, classification) is unit-tested
-with busted under `spec/`. The Neovim-coupled modules — Treesitter parsing,
-extmark/diagnostic rendering, the curl queue, and buffer actions — are exercised
-against a real headless Neovim under `test/`, run with
-`nvim --headless -u NONE -l test/run.lua` (no busted/luarocks needed). Both
-suites run in CI.
+The split is by what a test needs to run. `spec/` is the busted suite: anything
+that runs without Neovim, stubbing the `vim` APIs a module touches. `test/` is
+everything that needs a real editor — Treesitter parsing, extmark/diagnostic
+rendering, the curl queue, and buffer actions — run against a headless Neovim
+with `nvim --headless -u NONE -l test/run.lua` (no busted/luarocks needed).
+Both suites run in CI.
 
 CI runs the Lua checks on Ubuntu and macOS, and the dependency-free
-headless-Neovim integration suite on Ubuntu, macOS, and Windows. The Elixir
-Treesitter parser is installed best-effort on Linux; parser-independent and
+headless-Neovim integration suite on Ubuntu, macOS, and Windows. CI installs the
+Elixir Treesitter parser best-effort on Linux; parser-independent and
 platform-sensitive regressions run on every integration platform.
 
 ## License

@@ -60,7 +60,8 @@ function M.check()
 
 	-- `language.add` signals "not found" by returning `nil, err` (without raising)
 	-- on modern Neovim, and by raising on older versions; require a truthy return,
-	-- not merely a successful pcall, or a missing parser is reported as present.
+	-- not merely a successful pcall, or this check reports a missing parser as
+	-- present.
 	local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
 	if added_ok and added then
 		health.ok("`elixir` Treesitter parser available")

@@ -19,18 +19,18 @@ CONTENTS                                                  *hex-outdated-contents
 1. INTRODUCTION                                       *hex-outdated-introduction*
 
 hex-outdated.nvim gives live "are my Hex deps up to date?" feedback for Elixir
-`mix.exs`, in the spirit of crates.nvim. As you edit `mix.exs`, each
-dependency's declared version requirement is checked against hex.pm: inline
+`mix.exs`, in the spirit of crates.nvim. As you edit `mix.exs`, the plugin
+checks each dependency's declared version requirement against hex.pm: inline
 virtual text shows the latest version and status, and non-existent
-versions/packages surface as diagnostics.
+versions/packages show up as diagnostics.
 
 ==============================================================================
 2. REQUIREMENTS                                       *hex-outdated-requirements*
 
 - Neovim 0.10+
 - `curl` on PATH
-- (Recommended) the `elixir` Treesitter parser (`:TSInstall elixir`); a
-  Lua-pattern fallback is used if it is missing.
+- (Recommended) the `elixir` Treesitter parser (`:TSInstall elixir`); without
+  it, the plugin falls back to Lua patterns.
 
 Run |:checkhealth| hex-outdated to verify these.
 
@@ -78,7 +78,7 @@ through `setup()`.
 
 Open a `mix.exs` — status appears automatically and updates as you type.
 
-The actions are exposed as Lua functions so you can bind your own keys: >lua
+The actions are also plain Lua functions, so you can bind your own keys: >lua
     local hex = require("hex-outdated")
     -- hex.refresh() / hex.toggle() / hex.upgrade() / hex.versions() / hex.open()
     -- hex.info()    / hex.lock()
@@ -99,14 +99,14 @@ The actions are exposed as Lua functions so you can bind your own keys: >lua
     open      Open the package's page on hex.pm in a browser.
     info      Floating detail view (requirement / locked / latest) for the
               dependency under the cursor.
-    lock      Toggle the per-buffer lock lens (a `locked X / latest Y` line
+    lock      Toggle the per-buffer lock lens (a `locked X · latest Y` line
               under each dependency).
 
 Selecting a release from `versions` preserves the current requirement
 operator: comparison requirements stay comparisons, bare exact versions stay
 bare, and `~>` keeps its existing precision (with full prerelease versions
-preserved). Retired Hex releases are excluded from status calculations and the
-popup.
+preserved). The plugin excludes retired Hex releases from status calculations
+and the popup.
 
 ==============================================================================
 6. STATUS MEANINGS                                          *hex-outdated-status*
@@ -116,19 +116,19 @@ popup.
   outdated    An exact pin (`==`) that is below the latest release.
   invalid     No published version matches the requirement (also a diagnostic).
 
-Git/path deps and requirements the plugin can't analyze (combined `and`/`or`
-clauses) are left unannotated.
+The plugin leaves Git/path deps unannotated, along with requirements it can't
+analyze (combined `and`/`or` clauses).
 
 ==============================================================================
 7. LOCK CONTEXT                                               *hex-outdated-lock*
 
 By default hex-outdated reads only `mix.exs`. When a `mix.lock` is present it
-can also surface what is actually locked, kept secondary so the inline
+can also show what is actually locked, kept secondary so the inline
 requirement status stays primary:
 
   - Detail float: `:HexOutdated info` (or press K on a dependency line) shows
     requirement / locked / latest for the dependency under the cursor.
-  - Lens: `:HexOutdated lock` toggles a `locked X / latest Y` line under each
+  - Lens: `:HexOutdated lock` toggles a `locked X · latest Y` line under each
     dependency (off by default).
   - Stale-lock diagnostic: a warning when `mix.lock` holds a version that no
     longer satisfies your requirement (e.g. after you tighten it), prompting a
@@ -158,7 +158,7 @@ to false to leave K alone.
       },
       lock = {
         enabled = true,          -- read mix.lock when present
-        lens = false,            -- show the locked-version lens by default
+        lens = false,            -- locked-version lens; off by default
         stale_diagnostic = true, -- warn when the lock no longer satisfies req
       },
       text = {                   -- %s is the latest version
@@ -210,16 +210,16 @@ Run |:checkhealth| hex-outdated to verify Neovim version, `curl`, and the
 ==============================================================================
 11. HOW IT WORKS                                      *hex-outdated-how-it-works*
 
-`mix.exs` is parsed with Treesitter (Lua-pattern fallback) to find dependency
-tuples inside the function referenced by the project's `deps:` setting
-(`deps/0` by default). Hex package aliases such as
-`{:local_app, "~> 2.0", hex: :actual_package}` are used for API lookups while
-the local application name remains associated with `mix.lock`. For each Hex
-dependency the plugin asynchronously queries
+hex-outdated parses `mix.exs` with Treesitter (Lua-pattern fallback) to find
+dependency tuples inside the function referenced by the project's `deps:`
+setting (`deps/0` by default). A Hex package alias such as
+`{:local_app, "~> 2.0", hex: :actual_package}` points the API lookup at the
+real package, while the local application name still keys into `mix.lock`. For
+each Hex dependency the plugin asynchronously queries
 `https://hex.pm/api/packages/:name` (cached), excludes retired releases, then
 compares your requirement against the active published versions using Hex
-prerelease semantics. The requirement status comes from `mix.exs` alone;
-`mix.lock` is read locally only for the optional lock context (see
+prerelease semantics. The requirement status comes from `mix.exs` alone; the
+plugin reads `mix.lock` locally, and only for the optional lock context (see
 |hex-outdated-lock|). There is no shelling out to `mix`.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

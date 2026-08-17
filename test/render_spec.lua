@@ -8,7 +8,7 @@ local function fresh_buf(lines)
 	return buf
 end
 
--- The virtual-text namespace is created with this exact name in render.lua.
+-- render.lua creates the virtual-text namespace under this exact name.
 local virt_ns = vim.api.nvim_create_namespace("hex_outdated_virt")
 
 describe("render", function()

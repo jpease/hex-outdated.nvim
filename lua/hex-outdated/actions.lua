@@ -249,7 +249,7 @@ local STALE_HEADER = "-- cached (offline) --"
 
 --- Open a floating window listing published versions for the dep; selecting one
 --- (Enter) inserts it into the requirement; `q`/<Esc> closes.
---- `fetch(name, cb)` is injected by the caller (wraps hex_api.get_package).
+--- The caller injects `fetch(name, cb)` (it wraps hex_api.get_package).
 function M.versions(bufnr, dep, fetch)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
@@ -323,7 +323,8 @@ function M.versions(bufnr, dep, fetch)
 end
 
 --- Open a read-only detail float for `dep` (requirement / locked / latest).
---- `fetch(name, cb)` is injected to resolve `latest` when it is not yet known.
+--- The caller injects `fetch(name, cb)` to resolve `latest` when it is not yet
+--- known.
 function M.info(dep, fetch)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)

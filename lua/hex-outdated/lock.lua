@@ -2,9 +2,9 @@ local version = require("hex-outdated.version")
 
 local M = {}
 
---- Parse mix.lock contents into { [name] = version_string }. Only :hex entries
---- ("name": {:hex, :atom, "ver", ...}) are kept; git/path entries have no
---- semver and are skipped. Pure; no Neovim APIs.
+--- Parse mix.lock contents into { [name] = version_string }. Keeps only :hex
+--- entries ("name": {:hex, :atom, "ver", ...}) and skips git/path entries,
+--- which carry no semver. Pure; no Neovim APIs.
 function M.parse(text)
 	local locks = {}
 	if type(text) ~= "string" then
@@ -105,8 +105,9 @@ local function stat_identity(stat)
 	}, ":")
 end
 
---- Read + parse the lock file at `path`, memoized by mtime. Returns the
---- name -> version map, or {} when the file is missing or unreadable.
+--- Read + parse the lock file at `path`, memoized by a file-metadata
+--- signature (mtime, ctime, size). Returns the name -> version map, or {}
+--- when the file is missing or unreadable.
 function M.load(path)
 	if type(path) ~= "string" then
 		return {}

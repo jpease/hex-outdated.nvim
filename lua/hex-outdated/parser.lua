@@ -142,7 +142,7 @@ end
 -- of those, this scans one physical line at a time; multi-line heredocs are
 -- handled upstream by `mask_heredocs`, whose output is what every caller in
 -- this file actually scans, so a line reaching this function either isn't
--- part of a heredoc or has already been neutralised to whitespace / an empty
+-- part of a heredoc or has already been neutralized to whitespace / an empty
 -- string.
 local function mask_strings(code)
 	local out = {}

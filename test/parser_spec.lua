@@ -582,7 +582,7 @@ describe("parser parity: treesitter vs fallback", function()
 	-- `expect`, when present, is the exact list of dep names both paths must
 	-- return. Cases without it assert agreement only; a case whose bug makes both
 	-- paths agree on the *wrong* answer (e.g. both returning nothing) must set it,
-	-- or the parity assertion alone would pass vacuously.
+	-- or the parity assertion alone would pass without testing anything.
 	local CASES = {
 		{
 			desc = "hex deps with scm tuples skipped",
