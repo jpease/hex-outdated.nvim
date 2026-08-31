@@ -21,14 +21,11 @@ end
 -- but get_package must not let a bad value reach `fresh`'s numeric comparison
 -- regardless of caller (tests, other integrations, or config.setup being
 -- bypassed entirely) — mirrors the existing max_concurrent clamp below.
+-- Goes through the same util.normalize_number contract config.lua's
+-- normalization pass uses, rather than a lookalike copy of it (#72).
 local function safe_ttl(v, default)
-	if v == nil then
-		return default
-	end
-	if type(v) ~= "number" or v ~= v or v == math.huge or v == -math.huge or v < 0 then
-		return default
-	end
-	return v
+	local value = util.normalize_number(v, { default = default, min = 0 })
+	return value
 end
 
 -- Concurrency state. `max_concurrent` bounds simultaneously running curl
@@ -238,18 +235,11 @@ function M.get_package(name, opts, callback)
 	if opts.max_concurrent ~= nil then
 		-- Config-level validation (config.setup) already warns once for invalid
 		-- values; this is a silent defensive clamp for callers that bypass it.
-		local mc = opts.max_concurrent
-		if
-			type(mc) ~= "number"
-			or mc ~= mc
-			or mc == math.huge
-			or mc == -math.huge
-			or math.floor(mc) < 1
-		then
-			max_concurrent = 1
-		else
-			max_concurrent = math.floor(mc)
-		end
+		-- Same util.normalize_number contract as config.lua's api.max_concurrent
+		-- rule (fallback of 1, not the default of 8 — see config.lua's
+		-- NUMERIC_RULES comment), not a divergent copy of it (#72).
+		max_concurrent =
+			util.normalize_number(opts.max_concurrent, { default = 1, integer = true, min = 1 })
 	end
 	if not opts.force and fresh(cache[key], ttl, error_ttl) then
 		callback(cache[key])
