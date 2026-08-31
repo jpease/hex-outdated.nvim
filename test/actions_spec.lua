@@ -680,4 +680,35 @@ describe("actions.info float", function()
 			is_nil(float_win(), "no float opened from a stale dependency snapshot")
 		end
 	)
+
+	it(
+		"discards a fetch result invalidated by an edit that leaves the cursor in place (issue #73)",
+		function()
+			local buf = mix_buf('      {:jason, "~> 1.0"},')
+			vim.api.nvim_set_current_buf(buf)
+			local dep = {
+				name = "jason",
+				requirement = "~> 1.0",
+				status = "loading",
+				changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			}
+			local callback
+			actions.info(buf, dep, function(_, cb)
+				callback = cb
+			end)
+
+			-- Edit the dependency's own line without moving the cursor off it.
+			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+			truthy(callback, "fetch was started before the edit")
+			callback({ latest = "1.4.5", versions = { "1.0.0", "1.4.5" } })
+
+			vim.wait(100, function()
+				return float_win() ~= nil
+			end, 5)
+
+			eq("loading", dep.status, "dep not mutated by a fetch invalidated during the request")
+			is_nil(dep.latest, "dep.latest not mutated by a fetch invalidated during the request")
+			is_nil(float_win(), "no stale float opened for the invalidated fetch")
+		end
+	)
 end)

@@ -25,16 +25,25 @@ local function context_is_current(win, bufnr, cursor)
 end
 
 -- True when `dep` was analyzed against the buffer's current changedtick. A dep
--- with no changedtick (e.g. hand-built in a test) is treated as always fresh.
--- Shared by every action that would otherwise act on a stale dependency
--- snapshot: the edit-producing paths (replace_requirement, for upgrade and
--- version selection) and the read-only paths (open, info, versions).
-local function is_fresh(bufnr, dep)
+-- with no changedtick (e.g. hand-built in a test) is treated as always fresh,
+-- provided the buffer itself is still valid. Shared by every action that would
+-- otherwise act on a stale dependency snapshot: the edit-producing paths
+-- (replace_requirement, for upgrade and version selection) and the read-only
+-- paths (open, info, versions), plus info's own post-fetch and pre-display
+-- rechecks. Pass `silent` for a background recheck (e.g. after an async fetch
+-- resolves) where a user-facing warning would be surprising or duplicated;
+-- the pre-action guards keep the default, user-facing notification.
+local function is_fresh(bufnr, dep, silent)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		return false
+	end
 	if dep.changedtick and vim.api.nvim_buf_get_changedtick(bufnr) ~= dep.changedtick then
-		vim.notify(
-			"hex-outdated: dependency changed since it was analyzed; refresh and try again",
-			vim.log.levels.WARN
-		)
+		if not silent then
+			vim.notify(
+				"hex-outdated: dependency changed since it was analyzed; refresh and try again",
+				vim.log.levels.WARN
+			)
+		end
 		return false
 	end
 	return true
@@ -360,6 +369,12 @@ function M.info(bufnr, dep, fetch)
 			if not context_is_current(origin_win, origin, origin_cursor) then
 				return
 			end
+			-- Re-check freshness immediately before display: an edit to the dep's
+			-- own line that leaves window/buffer/cursor identity unchanged is
+			-- invisible to context_is_current, but still invalidates `dep`.
+			if not is_fresh(origin, dep, true) then
+				return
+			end
 			local lines = M._info_lines(dep)
 			local win = open_cursor_float(lines, {
 				filetype = "hex-outdated-info",
@@ -386,13 +401,24 @@ function M.info(bufnr, dep, fetch)
 		open()
 	else
 		fetch(package_name(dep), function(res)
+			-- Compute the classification as temporary presentation values first;
+			-- commit them onto the canonical dep only if it's still fresh (the
+			-- buffer may have been edited, or closed, while the fetch was in
+			-- flight). `open()` re-checks freshness again immediately before
+			-- display, independent of this commit.
+			local status, latest, suggested = dep.status, dep.latest, dep.suggested
 			if res and res.versions and #res.versions > 0 then
 				local c = version.classify(dep.requirement, res.versions)
-				dep.status = c.status
-				dep.latest = c.latest
-				dep.suggested = dep.suggested or c.suggested
+				status = c.status
+				latest = c.latest
+				suggested = suggested or c.suggested
 			elseif res and res.latest then
-				dep.latest = res.latest
+				latest = res.latest
+			end
+			if is_fresh(bufnr, dep, true) then
+				dep.status = status
+				dep.latest = latest
+				dep.suggested = suggested
 			end
 			open()
 		end)
