@@ -336,11 +336,20 @@ local function compute_classify(req_str, published)
 	return result
 end
 
+local function shallow_copy(t)
+	local copy = {}
+	for k, v in pairs(t) do
+		copy[k] = v
+	end
+	return copy
+end
+
 --- Classify a requirement string against a list of published version strings.
 --- Returns { status, latest?, suggested?, op? } where status is one of
 --- "up_to_date" | "upgradable" | "outdated" | "invalid" | "unknown".
---- Results are memoized per (published list identity, requirement); callers must
---- treat the returned table as read-only and not mutate it.
+--- Results are memoized per (published list identity, requirement). Each call
+--- returns a fresh copy, so mutating a returned table never affects the cache
+--- or any other caller.
 function M.classify(req_str, published)
 	if type(req_str) ~= "string" then
 		return compute_classify(req_str, published or {})
@@ -352,12 +361,11 @@ function M.classify(req_str, published)
 		classify_memo[published] = by_req
 	end
 	local cached = by_req[req_str]
-	if cached ~= nil then
-		return cached
+	if cached == nil then
+		cached = compute_classify(req_str, published)
+		by_req[req_str] = cached
 	end
-	local result = compute_classify(req_str, published)
-	by_req[req_str] = result
-	return result
+	return shallow_copy(cached)
 end
 
 return M

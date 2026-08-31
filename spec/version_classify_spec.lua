@@ -157,7 +157,23 @@ describe("version.classify memoization", function()
 		end)
 
 		assert.are.equal(0, parses)
-		assert.are.equal(first, second) -- exact cached table, not a recompute
+		assert.are.same(first, second) -- value-equal, but not required to be the same table
+	end)
+
+	it("does not let mutating one returned result affect a later classification", function()
+		local list = { "1.6.0", "1.7.0", "1.7.14" }
+		local first = version.classify("~> 1.6", list)
+		local expected_status = first.status
+		local expected_latest = first.latest
+
+		first.status = "up_to_date"
+		first.latest = "poisoned"
+		first.op = "poisoned"
+
+		local second = version.classify("~> 1.6", list)
+		assert.are.equal(expected_status, second.status)
+		assert.are.equal(expected_latest, second.latest)
+		assert.are_not.equal("poisoned", second.op)
 	end)
 
 	it("recomputes when the requirement changes for the same list", function()
