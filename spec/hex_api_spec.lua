@@ -835,3 +835,233 @@ describe("api.get_package TTL clamping (issue #49)", function()
 		assert.are.equal(0, #warnings)
 	end)
 end)
+
+-- Resetting the scheduler while curl processes from before the reset are still
+-- running (issue #74). Pre-fix, `clear_cache()` wiped `pending` and zeroed
+-- `in_flight` unconditionally, so a completion from before the reset found no
+-- callback list (`ipairs(nil)` raised), drove the active count to -1, and wrote
+-- its result into the freshly cleared cache.
+describe("api.get_package reset while requests are active (issue #74)", function()
+	local old_vim
+	local api
+	local system_calls
+	local exits
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		system_calls = 0
+		exits = {}
+		_G.vim = {
+			system = function(_, _, on_exit)
+				system_calls = system_calls + 1
+				exits[#exits + 1] = on_exit
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			json = {
+				decode = function()
+					return { releases = { { version = "1.0.0" } }, latest_stable_version = "1.0.0" }
+				end,
+			},
+		}
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+	end)
+
+	after_each(function()
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("does not raise when a request completes after clear_cache", function()
+		api.get_package("a", { ttl_seconds = 3600 }, function() end)
+		api.clear_cache()
+
+		assert.has_no.errors(function()
+			exits[1]({ code = 0, stdout = "body\n200" })
+		end)
+	end)
+
+	it("keeps the concurrency cap intact after a late completion", function()
+		api.get_package("a", { max_concurrent = 1 }, function() end)
+		api.clear_cache()
+		-- Pre-fix this decrements the reset counter to -1 (and then raises).
+		pcall(exits[1], { code = 0, stdout = "body\n200" })
+		assert.are.equal(1, system_calls)
+
+		api.get_package("b", { max_concurrent = 1 }, function() end)
+		api.get_package("c", { max_concurrent = 1 }, function() end)
+
+		-- "c" queues behind "b" only if the active count is 1, not 0 or -1.
+		assert.are.equal(2, system_calls)
+	end)
+
+	it("does not repopulate the cleared cache from a late completion", function()
+		api.get_package("a", { ttl_seconds = 3600 }, function() end)
+		api.clear_cache()
+		pcall(exits[1], { code = 0, stdout = "body\n200" })
+
+		api.get_package("a", { ttl_seconds = 3600 }, function() end)
+
+		assert.are.equal(2, system_calls) -- the cache really was cleared
+	end)
+
+	it("still answers the waiters a retired request was spawned for", function()
+		local result
+		api.get_package("a", { ttl_seconds = 3600 }, function(r)
+			result = r
+		end)
+		api.clear_cache()
+		exits[1]({ code = 0, stdout = "body\n200" })
+
+		assert.is_truthy(result)
+		assert.are.same({ "1.0.0" }, result.versions)
+	end)
+
+	it("discards queued work on reset without stalling later requests", function()
+		api.get_package("a", { max_concurrent = 1 }, function() end)
+		api.get_package("b", { max_concurrent = 1 }, function() end)
+		assert.are.equal(1, system_calls) -- "b" is queued behind "a"
+
+		api.clear_cache()
+
+		api.get_package("c", { max_concurrent = 1 }, function() end)
+		assert.are.equal(2, system_calls) -- the reset freed the slot, so "c" runs now
+
+		pcall(exits[1], { code = 0, stdout = "body\n200" }) -- "a" completes late
+		assert.are.equal(2, system_calls) -- the discarded "b" is not resurrected
+	end)
+end)
+
+-- The scheduler's effect boundaries -- process spawn, event-loop scheduling,
+-- clock, JSON decode -- are injectable (issue #74), so these tests run with no
+-- `vim` global at all rather than monkeypatching one wholesale.
+describe("api scheduler boundaries (issue #74)", function()
+	local old_vim
+	local api
+	local spawns
+	local fail_for
+	local decoder
+	local clock_time
+
+	before_each(function()
+		old_vim = rawget(_G, "vim")
+		_G.vim = nil
+		package.loaded["hex-outdated.hex_api"] = nil
+		api = require("hex-outdated.hex_api")
+
+		spawns = {}
+		fail_for = {}
+		clock_time = 1000
+		decoder = function()
+			return { releases = { { version = "1.0.0" } }, latest_stable_version = "1.0.0" }
+		end
+		api._set_boundaries({
+			system = function(cmd, _opts, on_exit)
+				local name = cmd[#cmd]:match("/packages/(.+)$")
+				spawns[#spawns + 1] = { name = name, on_exit = on_exit }
+				if fail_for[name] then
+					error("ENOENT: curl not found")
+				end
+				return {}
+			end,
+			schedule = function(fn)
+				fn()
+			end,
+			now = function()
+				return clock_time
+			end,
+			decode_json = function(body)
+				return decoder(body)
+			end,
+		})
+	end)
+
+	after_each(function()
+		api._set_boundaries(nil)
+		package.loaded["hex-outdated.hex_api"] = nil
+		_G.vim = old_vim
+	end)
+
+	it("fetches through the injected boundaries with no vim global", function()
+		local result
+		api.get_package("a", { ttl_seconds = 3600 }, function(r)
+			result = r
+		end)
+		assert.is_nil(rawget(_G, "vim"))
+
+		spawns[1].on_exit({ code = 0, stdout = "body\n200" })
+
+		assert.are.same({ "1.0.0" }, result.versions)
+		assert.are.equal(1000, result.time) -- the injected clock, not os.time
+	end)
+
+	it("ignores a malformed late completion after a reset", function()
+		decoder = function()
+			return { releases = { 1 } } -- raises inside the response parser
+		end
+		api.get_package("a", { max_concurrent = 1 }, function() end)
+		api.clear_cache()
+
+		assert.has_no.errors(function()
+			spawns[1].on_exit({ code = 0, stdout = '{"releases":[1]}\n200' })
+		end)
+
+		api.get_package("b", { max_concurrent = 1 }, function() end)
+		api.get_package("c", { max_concurrent = 1 }, function() end)
+		assert.are.equal(2, #spawns) -- "c" queued behind "b": the count never went negative
+	end)
+
+	it("keeps draining the queue when a queued spawn fails", function()
+		fail_for = { b = true }
+		local results = {}
+		for _, name in ipairs({ "a", "b", "c" }) do
+			api.get_package(name, { max_concurrent = 1 }, function(r)
+				results[name] = r
+			end)
+		end
+		assert.are.equal(1, #spawns) -- "b" and "c" wait behind "a"
+
+		spawns[1].on_exit({ code = 0, stdout = "body\n200" })
+
+		assert.are.equal(3, #spawns) -- "b" attempted (and failed), then "c" started
+		assert.are.equal("b", spawns[2].name)
+		assert.are.equal("c", spawns[3].name)
+		assert.is_truthy(results.a)
+		assert.is_truthy(results.b.error) -- the spawn failure was delivered, not raised
+		assert.is_nil(results.c)
+
+		spawns[3].on_exit({ code = 0, stdout = "body\n200" })
+		assert.is_truthy(results.c)
+
+		-- Every slot the three requests took has been released again.
+		api.get_package("d", { max_concurrent = 1 }, function() end)
+		assert.are.equal(4, #spawns)
+	end)
+
+	it("ignores a duplicate completion for the same request", function()
+		api.get_package("a", { max_concurrent = 1 }, function() end)
+		local on_exit = spawns[1].on_exit
+		on_exit({ code = 0, stdout = "body\n200" })
+		on_exit({ code = 0, stdout = "body\n200" }) -- a double-fired completion
+
+		api.get_package("b", { max_concurrent = 1 }, function() end)
+		api.get_package("c", { max_concurrent = 1 }, function() end)
+
+		assert.are.equal(2, #spawns) -- no phantom free slot: "c" is queued behind "b"
+	end)
+
+	it("drains queued work when the concurrency limit is raised", function()
+		api.get_package("a", { max_concurrent = 1 }, function() end)
+		api.get_package("b", { max_concurrent = 1 }, function() end)
+		assert.are.equal(1, #spawns) -- "b" is queued behind "a"
+
+		api.get_package("c", { max_concurrent = 3 }, function() end)
+
+		assert.are.equal(3, #spawns)
+		assert.are.equal("b", spawns[2].name) -- the queue drains first, in FIFO order
+		assert.are.equal("c", spawns[3].name)
+	end)
+end)
