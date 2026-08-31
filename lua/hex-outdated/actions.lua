@@ -306,6 +306,12 @@ function M.versions(bufnr, dep, fetch)
 			if not context_is_current(origin_win, bufnr, origin_cursor) then
 				return
 			end
+			-- Re-check freshness immediately before display: an edit to the dep's
+			-- own line that leaves window/buffer/cursor identity unchanged is
+			-- invisible to context_is_current, but still invalidates `dep`.
+			if not is_fresh(bufnr, dep, true) then
+				return
+			end
 			-- An error alongside usable versions only happens via the stale
 			-- carry-over path, so res.error (not res.stale) is the source of truth
 			-- for whether to warn the user the list may be out of date.
