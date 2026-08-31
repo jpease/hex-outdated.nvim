@@ -128,11 +128,10 @@ function M._info_lines(dep)
 	return lines
 end
 
---- Return the dep whose row matches the cursor, or nil.
-function M.dep_at_cursor(deps)
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local row = cursor[1] - 1
-	local col = cursor[2]
+--- Return the dep at zero-based `row`/`col` — exact span match, else the
+--- nearest dep with span metadata, else the first span-less dep on the row —
+--- or nil (pure; no Neovim APIs).
+function M.dep_at_position(deps, row, col)
 	local nearest
 	local nearest_distance
 	for _, dep in ipairs(deps or {}) do
@@ -157,6 +156,12 @@ function M.dep_at_cursor(deps)
 		end
 	end
 	return nearest
+end
+
+--- Return the dep whose row matches the cursor, or nil.
+function M.dep_at_cursor(deps)
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	return M.dep_at_position(deps, cursor[1] - 1, cursor[2])
 end
 
 --- Replace the requirement under the cursor with its suggested upgrade.
