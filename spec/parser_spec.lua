@@ -828,6 +828,159 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal(1, #deps)
 		assert.are.equal("jason", deps[1].name)
 	end)
+
+	-- Fallback-only charlist/sigil edge cases (issue #69). Parity cases (both
+	-- paths must agree) live in test/parser_spec.lua's parity CASES table.
+	it("does not treat a charlist's 'do' as a block opener (issue #69)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project, do: [deps: deps()]",
+			"",
+			"  defp deps do",
+			"    marker = ['do']",
+			'    [{:jason, "~> 1.4"}]',
+			"  end",
+			"",
+			"  defp unrelated do",
+			'    [{:poison, "~> 5.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("does not treat an inline sigil's 'do' as a block opener (issue #69)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project, do: [deps: deps()]",
+			"",
+			"  defp deps do",
+			"    marker = ~w(do)a",
+			'    [{:jason, "~> 1.4"}]',
+			"  end",
+			"",
+			"  defp unrelated do",
+			'    [{:poison, "~> 5.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("does not treat a '#' inside a charlist as a comment starter (issue #69)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			"  _ = '#'; [{:jason, \"~> 1.4\"}]",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("does not treat a '#' inside an inline sigil as a comment starter (issue #69)", function()
+		local deps = parser.parse_lines({
+			"defp deps do",
+			'  _ = ~s(#); [{:jason, "~> 1.4"}]',
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("does not treat a stray '[' inside a charlist as real bracket syntax (issue #69)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project, do: [deps: deps()]",
+			"",
+			"  defp deps do",
+			"    x = '=['",
+			'    [{:jason, "~> 1.4"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it(
+		"does not treat a stray '[' inside an inline sigil as real bracket syntax (issue #69)",
+		function()
+			local deps = parser.parse_lines({
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				"",
+				"  defp deps do",
+				"    x = ~s(=[)",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"end",
+			})
+			assert.are.equal(1, #deps)
+			assert.are.equal("jason", deps[1].name)
+		end
+	)
+
+	it(
+		"nests a paired sigil delimiter rather than closing at the first match (issue #69)",
+		function()
+			local deps = parser.parse_lines({
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				"",
+				"  defp deps do",
+				"    x = ~s(a (b) do c)",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:poison, "~> 5.0"}]',
+				"  end",
+				"end",
+			})
+			assert.are.equal(1, #deps)
+			assert.are.equal("jason", deps[1].name)
+		end
+	)
+
+	it("respects backslash-escaping inside a charlist (issue #69)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project, do: [deps: deps()]",
+			"",
+			"  defp deps do",
+			"    x = 'abc\\'do'",
+			'    [{:jason, "~> 1.4"}]',
+			"  end",
+			"",
+			"  defp unrelated do",
+			'    [{:poison, "~> 5.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("respects backslash-escaping inside a same-character sigil delimiter (issue #69)", function()
+		local deps = parser.parse_lines({
+			"defmodule Demo.MixProject do",
+			"  def project, do: [deps: deps()]",
+			"",
+			"  defp deps do",
+			"    x = ~r/abc\\/end/",
+			'    [{:jason, "~> 1.4"}]',
+			"  end",
+			"",
+			"  defp unrelated do",
+			'    [{:poison, "~> 5.0"}]',
+			"  end",
+			"end",
+		})
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
 end)
 
 describe("parser.parse_buffer treesitter query caching", function()

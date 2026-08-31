@@ -1411,6 +1411,44 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			-- The issue's own reproduction: a charlist containing the text "do"
+			-- must not be counted as a block opener by the fallback scanner.
+			desc = "charlist contents do not affect block depth (issue #69)",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				"",
+				"  defp deps do",
+				"    marker = ['do']",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:poison, "~> 5.0"}]',
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "inline sigil contents do not affect block depth (issue #69)",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				"",
+				"  defp deps do",
+				"    marker = ~w(do)a",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"",
+				"  defp unrelated do",
+				'    [{:poison, "~> 5.0"}]',
+				"  end",
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is

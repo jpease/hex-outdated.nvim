@@ -12,19 +12,119 @@ local DEP_PATTERN = '{%s*:([%w_]+)%s*,%s*"'
 -- all inline DEP_PATTERN matches on it have been exhausted.
 local PENDING_DEP_PATTERN = "{%s*:([%w_]+)%s*,%s*$"
 
+-- Standard Elixir sigil delimiter pairs (issue #69). The four paired forms
+-- nest -- `~s(a (b) c)` is one sigil literal, so a nested open delimiter
+-- pushes the depth back up rather than being treated as ordinary text. The
+-- four same-character forms do not nest -- the literal ends at the first
+-- matching, non-escaped closer, exactly like an ordinary string.
+local SIGIL_CLOSE = { ["("] = ")", ["["] = "]", ["{"] = "}", ["<"] = ">" }
+local SIGIL_SAME = { ['"'] = true, ["'"] = true, ["|"] = true, ["/"] = true }
+
+-- If `code:sub(i, i)` is "~" and a sigil opens there (one or more letters
+-- immediately followed, no whitespace, by one of the 8 standard delimiters),
+-- return the index of the opening delimiter character itself, the character
+-- that closes it, and whether that pair nests. Returns nil for a bare "~"
+-- that isn't a sigil prefix (not a token this file needs to give any other
+-- meaning to), in which case the caller treats it as ordinary text. Shared by
+-- `literal_span` below (for `strip_comment`/`mask_strings`, which can look
+-- ahead across the whole line) and `advance_brackets` (which cannot -- it is
+-- a resumable, one-character-at-a-time scanner -- so it uses only this
+-- open-detection step and tracks the matching close itself, the same way it
+-- already tracks an open double-quoted string).
+local function sigil_delim(code, i)
+	local j = i + 1
+	while code:sub(j, j):match("%a") do
+		j = j + 1
+	end
+	if j == i + 1 then
+		return nil
+	end
+	local d = code:sub(j, j)
+	if SIGIL_CLOSE[d] then
+		return j, SIGIL_CLOSE[d], true
+	elseif SIGIL_SAME[d] then
+		return j, d, false
+	end
+	return nil
+end
+
+-- If a charlist ('...') or single-line sigil opens at `code:sub(i, i)` (i.e.
+-- `code:sub(i,i)` is "'" or a "~" that `sigil_delim` confirms), return the
+-- index of its opening delimiter character and the index of its closing
+-- delimiter -- or `#code + 1` when the literal is unterminated on this line,
+-- meaning it runs inert to the end of the line, matching how an unterminated
+-- `"..."` string is already treated by `mask_strings` below. Backslash
+-- escaping works exactly as it does inside `"..."` elsewhere in this file.
+-- Returns nil when no literal opens at `i` at all (a "~" that isn't a valid
+-- sigil prefix), in which case the character at `i` is ordinary text.
+--
+-- Used by `strip_comment` and `mask_strings`, which both scan one whole
+-- physical line at a time and so can look ahead freely; `advance_brackets`
+-- cannot use this directly (see `sigil_delim`'s doc comment) but applies the
+-- same nesting/escaping rules through its own resumable state.
+local function literal_span(code, i)
+	local ch = code:sub(i, i)
+	local open_idx, close_char, nests
+	if ch == "'" then
+		open_idx, close_char, nests = i, "'", false
+	elseif ch == "~" then
+		open_idx, close_char, nests = sigil_delim(code, i)
+		if not open_idx then
+			return nil
+		end
+	else
+		return nil
+	end
+	local open_delim = code:sub(open_idx, open_idx)
+	local depth = 1
+	local escaped = false
+	local k = open_idx + 1
+	while k <= #code do
+		local c = code:sub(k, k)
+		if escaped then
+			escaped = false
+		elseif c == "\\" then
+			escaped = true
+		elseif nests and c == open_delim then
+			depth = depth + 1
+		elseif c == close_char then
+			depth = depth - 1
+			if depth == 0 then
+				return open_idx, k
+			end
+		end
+		k = k + 1
+	end
+	return open_idx, #code + 1
+end
+
 local function strip_comment(line)
 	local in_string = false
 	local escaped = false
-	for i = 1, #line do
+	local i = 1
+	while i <= #line do
 		local char = line:sub(i, i)
 		if escaped then
 			escaped = false
+			i = i + 1
 		elseif char == "\\" and in_string then
 			escaped = true
+			i = i + 1
 		elseif char == '"' then
 			in_string = not in_string
+			i = i + 1
 		elseif char == "#" and not in_string then
 			return line:sub(1, i - 1)
+		elseif not in_string and (char == "'" or char == "~") then
+			-- A charlist or sigil literal may itself contain a "#" (or, for a
+			-- sigil, may simply fail to open at all for a bare "~"); either way
+			-- this is not a real comment start, so skip past whatever literal
+			-- span (if any) is here rather than scanning its characters one at
+			-- a time (issue #69).
+			local _, close = literal_span(line, i)
+			i = close and (close + 1) or (i + 1)
+		else
+			i = i + 1
 		end
 	end
 	return line
@@ -133,36 +233,63 @@ local function mask_heredocs(lines)
 	return masked
 end
 
--- Replace the contents of double-quoted string literals in `code` with spaces,
--- preserving length (and the quotes themselves) so column offsets elsewhere
--- stay meaningful. Used by `count_openers` below so a "do" or "fn" inside a
--- string's text (e.g. a SemVer pre-release tag like "== 1.0.0-do") is never
--- mistaken for a block-opening keyword. Uses the same in_string/escaped
--- string-scan convention as `strip_comment` and `advance_brackets`. Like both
--- of those, this scans one physical line at a time; multi-line heredocs are
--- handled upstream by `mask_heredocs`, whose output is what every caller in
--- this file actually scans, so a line reaching this function either isn't
--- part of a heredoc or has already been neutralized to whitespace / an empty
--- string.
+-- Replace the contents of double-quoted string literals, charlists, and
+-- single-line sigils in `code` with spaces, preserving length (and the
+-- delimiter characters themselves) so column offsets elsewhere stay
+-- meaningful. Used by `count_openers` below so a "do" or "fn" inside a
+-- string's text (e.g. a SemVer pre-release tag like "== 1.0.0-do"), inside a
+-- charlist (`'do'`), or inside a sigil (`~w(do)a`) is never mistaken for a
+-- block-opening keyword (issue #69 for the latter two). Uses the same
+-- in_string/escaped string-scan convention as `strip_comment` and
+-- `advance_brackets` for `"..."`, and `literal_span` for charlists/sigils.
+-- Like both of those, this scans one physical line at a time; multi-line
+-- heredocs are handled upstream by `mask_heredocs`, whose output is what
+-- every caller in this file actually scans, so a line reaching this function
+-- either isn't part of a heredoc or has already been neutralized to
+-- whitespace / an empty string.
 local function mask_strings(code)
 	local out = {}
 	local in_string = false
 	local escaped = false
-	for i = 1, #code do
+	local i = 1
+	while i <= #code do
 		local char = code:sub(i, i)
 		if escaped then
 			out[i] = " "
 			escaped = false
+			i = i + 1
 		elseif char == "\\" and in_string then
 			out[i] = " "
 			escaped = true
+			i = i + 1
 		elseif char == '"' then
 			in_string = not in_string
 			out[i] = char
+			i = i + 1
 		elseif in_string then
 			out[i] = " "
+			i = i + 1
+		elseif char == "'" or char == "~" then
+			local open_idx, close_idx = literal_span(code, i)
+			if not open_idx then
+				out[i] = char
+				i = i + 1
+			else
+				for k = i, open_idx do
+					out[k] = code:sub(k, k)
+				end
+				local interior_end = math.min(close_idx - 1, #code)
+				for k = open_idx + 1, interior_end do
+					out[k] = " "
+				end
+				if close_idx <= #code then
+					out[close_idx] = code:sub(close_idx, close_idx)
+				end
+				i = close_idx + 1
+			end
 		else
 			out[i] = char
+			i = i + 1
 		end
 	end
 	return table.concat(out)
@@ -554,12 +681,30 @@ local function new_bracket_state(returned_var)
 		col = 1,
 		in_string = false,
 		escaped = false,
+		-- Charlist/sigil tracking (issue #69): while `in_literal` is true,
+		-- `literal_open`/`literal_close` name the delimiter pair (equal for a
+		-- charlist and a same-character sigil form; different for a paired
+		-- sigil form), `literal_nests` says whether a nested `literal_open`
+		-- increases `literal_depth` rather than being ordinary text, and
+		-- `literal_depth` is the current nesting depth (closes at 0).
+		in_literal = false,
+		literal_open = nil,
+		literal_close = nil,
+		literal_nests = false,
+		literal_depth = 0,
 	}
 end
 
 -- Advance the tracker through `code` up to (but excluding) column `to`,
--- continuing the per-line string scan from `state.col`. Brackets and quotes
--- inside string literals are ignored.
+-- continuing the per-line string scan from `state.col`. Brackets, quotes, and
+-- keywords inside string literals, charlists, and single-line sigils are
+-- ignored (issue #69 added the latter two; see `new_bracket_state`'s literal
+-- fields). A charlist/sigil is detected the same way `literal_span` (used by
+-- `strip_comment`/`mask_strings`) detects one, via the shared `sigil_delim`
+-- primitive, but its close is tracked char-by-char in `state` rather than
+-- found by scanning ahead, since this function must remain resumable across
+-- multiple calls within one line -- exactly how `state.in_string` already
+-- works for `"..."`.
 local function advance_brackets(state, code, to)
 	while state.col < to do
 		local ch = code:sub(state.col, state.col)
@@ -572,10 +717,51 @@ local function advance_brackets(state, code, to)
 				state.in_string = false
 				state.prev_sig, state.last_sig = state.last_sig, '"'
 			end
+		elseif state.in_literal then
+			if state.escaped then
+				state.escaped = false
+			elseif ch == "\\" then
+				state.escaped = true
+			elseif state.literal_nests and ch == state.literal_open then
+				state.literal_depth = state.literal_depth + 1
+			elseif ch == state.literal_close then
+				state.literal_depth = state.literal_depth - 1
+				if state.literal_depth == 0 then
+					state.in_literal = false
+					state.prev_sig, state.last_sig = state.last_sig, ch
+				end
+			end
 		elseif ch == '"' then
 			state.in_string = true
 			state.last_ident, state.cur_ident =
 				state.cur_ident ~= "" and state.cur_ident or state.last_ident, ""
+		elseif ch == "'" then
+			state.in_literal = true
+			state.literal_open, state.literal_close, state.literal_nests, state.literal_depth =
+				"'", "'", false, 1
+			state.last_ident, state.cur_ident =
+				state.cur_ident ~= "" and state.cur_ident or state.last_ident, ""
+		elseif ch == "~" then
+			local open_idx, close_char, nests = sigil_delim(code, state.col)
+			if open_idx then
+				-- Jump straight to the opening delimiter: the "~" and the
+				-- sigil-name letters between it and `open_idx` need no
+				-- per-character handling, matching how the `"` branch above
+				-- moves straight into string mode on the quote itself.
+				state.col = open_idx
+				state.in_literal = true
+				state.literal_open, state.literal_close, state.literal_nests, state.literal_depth =
+					code:sub(open_idx, open_idx), close_char, nests, 1
+				state.last_ident, state.cur_ident =
+					state.cur_ident ~= "" and state.cur_ident or state.last_ident, ""
+			else
+				-- Not a sigil prefix; treat "~" as ordinary significant
+				-- punctuation, same as the generic branch below.
+				if state.cur_ident ~= "" then
+					state.last_ident, state.cur_ident = state.cur_ident, ""
+				end
+				state.prev_sig, state.last_sig = state.last_sig, ch
+			end
 		elseif ch:match("[%w_]") then
 			-- Accumulate identifier characters; the completed word preceding a `=`
 			-- is the assignment target, compared against `returned_var` below.
@@ -658,6 +844,8 @@ local function parse_inline_deps(lines, scope)
 			brackets.col = 1
 			brackets.in_string = false
 			brackets.escaped = false
+			brackets.in_literal = false
+			brackets.literal_depth = 0
 		end
 		if active then
 			if pending then
@@ -772,9 +960,13 @@ function M.parse_lines(lines)
 		if active then
 			-- Per-line reset of the string scan; the bracket stack and last_sig
 			-- persist across lines so multi-line lists are tracked correctly.
+			-- Charlists and sigils are single-line-only for this parser (issue
+			-- #69), so `in_literal` resets here too, exactly like `in_string`.
 			brackets.col = 1
 			brackets.in_string = false
 			brackets.escaped = false
+			brackets.in_literal = false
+			brackets.literal_depth = 0
 			-- Multi-line assignment scope. The per-token `=`-before-`[` check only sees
 			-- the `=` when it is the most recent significant token, so a block-valued
 			-- assignment whose list sits past intervening tokens
