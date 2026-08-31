@@ -24,15 +24,27 @@ local function context_is_current(win, bufnr, cursor)
 	return not cursor or (current[1] == cursor[1] and current[2] == cursor[2])
 end
 
-local function replace_requirement(bufnr, dep, replacement)
-	if not vim.api.nvim_buf_is_valid(bufnr) then
-		return false
-	end
+-- True when `dep` was analyzed against the buffer's current changedtick. A dep
+-- with no changedtick (e.g. hand-built in a test) is treated as always fresh.
+-- Shared by every action that would otherwise act on a stale dependency
+-- snapshot: the edit-producing paths (replace_requirement, for upgrade and
+-- version selection) and the read-only paths (open, info, versions).
+local function is_fresh(bufnr, dep)
 	if dep.changedtick and vim.api.nvim_buf_get_changedtick(bufnr) ~= dep.changedtick then
 		vim.notify(
 			"hex-outdated: dependency changed since it was analyzed; refresh and try again",
 			vim.log.levels.WARN
 		)
+		return false
+	end
+	return true
+end
+
+local function replace_requirement(bufnr, dep, replacement)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		return false
+	end
+	if not is_fresh(bufnr, dep) then
 		return false
 	end
 	local ok, current =
@@ -160,9 +172,12 @@ function M.upgrade(bufnr, dep)
 end
 
 --- Open the package's hex.pm page in a browser.
-function M.open(dep)
+function M.open(bufnr, dep)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
+		return
+	end
+	if not is_fresh(bufnr, dep) then
 		return
 	end
 	vim.ui.open("https://hex.pm/packages/" .. package_name(dep))
@@ -255,6 +270,9 @@ function M.versions(bufnr, dep, fetch)
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
 	end
+	if not is_fresh(bufnr, dep) then
+		return
+	end
 	local origin_win = vim.api.nvim_get_current_win()
 	local origin_cursor = vim.api.nvim_win_get_cursor(origin_win)
 	fetch(package_name(dep), function(res)
@@ -325,12 +343,15 @@ end
 --- Open a read-only detail float for `dep` (requirement / locked / latest).
 --- The caller injects `fetch(name, cb)` to resolve `latest` when it is not yet
 --- known.
-function M.info(dep, fetch)
+function M.info(bufnr, dep, fetch)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
 	end
-	local origin = vim.api.nvim_get_current_buf()
+	if not is_fresh(bufnr, dep) then
+		return
+	end
+	local origin = bufnr
 	local origin_win = vim.api.nvim_get_current_win()
 	local origin_cursor = vim.api.nvim_win_get_cursor(origin_win)
 

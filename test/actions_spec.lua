@@ -213,6 +213,29 @@ describe("actions.versions float", function()
 		is_true(ok, tostring(err))
 		is_nil(float_win(), "no stale float opened")
 	end)
+
+	it(
+		"refuses a stale dependency snapshot rather than fetch the old package (issue #67)",
+		function()
+			local buf = mix_buf('      {:jason, "~> 1.4"},')
+			vim.api.nvim_set_current_buf(buf)
+			local dep = {
+				name = "jason",
+				changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			}
+			-- Simulate an edit landing after analysis but before the action runs.
+			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+
+			local fetched
+			actions.versions(buf, dep, function(name, cb)
+				fetched = name
+				cb({ versions = { "1.4.5" } })
+			end)
+
+			is_nil(fetched, "must not fetch a package from a stale dependency snapshot")
+			is_nil(float_win(), "no float opened from a stale dependency snapshot")
+		end
+	)
 end)
 
 describe("actions.versions stale results (issue #60)", function()
@@ -481,17 +504,42 @@ end)
 
 describe("actions.open", function()
 	it("opens the effective Hex package for an aliased dependency", function()
+		local buf = mix_buf('      {:local_app, "~> 1.0"},')
 		local original = vim.ui.open
 		local opened
 		vim.ui.open = function(url)
 			opened = url
 		end
 
-		actions.open({ name = "local_app", package = "actual_package" })
+		actions.open(buf, { name = "local_app", package = "actual_package" })
 
 		vim.ui.open = original
 		eq("https://hex.pm/packages/actual_package", opened)
 	end)
+
+	it(
+		"refuses a stale dependency snapshot rather than open the old package (issue #67)",
+		function()
+			local buf = mix_buf('      {:jason, "~> 1.4"},')
+			local dep = {
+				name = "jason",
+				changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			}
+			-- Simulate an edit landing after analysis but before the action runs.
+			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+
+			local original = vim.ui.open
+			local opened
+			vim.ui.open = function(url)
+				opened = url
+			end
+
+			actions.open(buf, dep)
+
+			vim.ui.open = original
+			is_nil(opened, "must not open a package from a stale dependency snapshot")
+		end
+	)
 end)
 
 describe("actions.info float", function()
@@ -506,7 +554,7 @@ describe("actions.info float", function()
 			locked = "1.2.0",
 		}
 		local requested
-		actions.info(dep, function(name, cb)
+		actions.info(buf, dep, function(name, cb)
 			requested = name
 			cb({ latest = "1.4.5", versions = { "1.4.5" } })
 		end)
@@ -531,7 +579,7 @@ describe("actions.info float", function()
 			local buf = mix_buf('      {:jason, "~> 1.0"},')
 			vim.api.nvim_set_current_buf(buf)
 			local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
-			actions.info(dep, function(_, cb)
+			actions.info(buf, dep, function(_, cb)
 				cb({ latest = "1.4.5", versions = { "1.0.0", "1.4.5" } })
 			end)
 
@@ -562,7 +610,7 @@ describe("actions.info float", function()
 			local buf = mix_buf('      {:jason, "~> 1.0"},')
 			vim.api.nvim_set_current_buf(buf)
 			local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
-			actions.info(dep, function(_, cb)
+			actions.info(buf, dep, function(_, cb)
 				cb({ error = "http 500" })
 			end)
 
@@ -593,9 +641,13 @@ describe("actions.info float", function()
 			scheduled = fn
 		end
 
-		actions.info({ name = "jason", requirement = "~> 1.0", status = "loading" }, function(_, cb)
-			callback = cb
-		end)
+		actions.info(
+			origin,
+			{ name = "jason", requirement = "~> 1.0", status = "loading" },
+			function(_, cb)
+				callback = cb
+			end
+		)
 		vim.api.nvim_buf_delete(origin, { force = true })
 		callback({ latest = "1.4.5", versions = { "1.4.5" } })
 
@@ -604,4 +656,28 @@ describe("actions.info float", function()
 		is_true(ok, tostring(err))
 		is_nil(float_win(), "no stale float opened")
 	end)
+
+	it(
+		"refuses a stale dependency snapshot rather than fetch the old package (issue #67)",
+		function()
+			local buf = mix_buf('      {:jason, "~> 1.4"},')
+			vim.api.nvim_set_current_buf(buf)
+			local dep = {
+				name = "jason",
+				requirement = "~> 1.0",
+				changedtick = vim.api.nvim_buf_get_changedtick(buf),
+			}
+			-- Simulate an edit landing after analysis but before the action runs.
+			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+
+			local fetched
+			actions.info(buf, dep, function(name, cb)
+				fetched = name
+				cb({ latest = "1.4.5", versions = { "1.4.5" } })
+			end)
+
+			is_nil(fetched, "must not fetch a package from a stale dependency snapshot")
+			is_nil(float_win(), "no float opened from a stale dependency snapshot")
+		end
+	)
 end)

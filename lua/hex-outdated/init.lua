@@ -40,8 +40,8 @@ function M.upgrade()
 end
 
 function M.open()
-	local _, deps = current_deps()
-	actions.open(actions.dep_at_cursor(deps))
+	local bufnr, deps = current_deps()
+	actions.open(bufnr, actions.dep_at_cursor(deps))
 end
 
 function M.versions()
@@ -52,11 +52,11 @@ function M.versions()
 end
 
 function M.info(dep)
+	local bufnr, deps = current_deps()
 	if not dep then
-		local _, deps = current_deps()
 		dep = actions.dep_at_cursor(deps)
 	end
-	actions.info(dep, function(name, cb)
+	actions.info(bufnr, dep, function(name, cb)
 		hex_api.get_package(name, core.api_opts(), cb)
 	end)
 end

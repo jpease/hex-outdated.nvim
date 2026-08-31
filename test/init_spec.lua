@@ -393,3 +393,60 @@ describe("auto_update debounce timer handle leak (issue #56)", function()
 		vim.api.nvim_buf_delete(buf, { force = true })
 	end)
 end)
+
+describe("read-only actions reject a stale dependency snapshot (issue #67)", function()
+	it("open/info/versions ignore a dep snapshot an edit invalidated after analysis", function()
+		local original_get_package = hex_api.get_package
+		-- Left unresolved: only changedtick stamping from the initial analyze
+		-- matters here, and each action must refuse before ever calling this.
+		hex_api.get_package = function() end
+
+		hex.setup({ enabled = true, auto_update = false })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.bo[buf].filetype = "elixir"
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+			"defp deps do",
+			'  [{:jason, "~> 1.4"}]',
+			"end",
+		})
+		vim.api.nvim_set_current_buf(buf)
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+		local st = core.state[buf]
+		truthy(
+			st and st.deps and st.deps[1] and st.deps[1].changedtick,
+			"dep analyzed with a changedtick"
+		)
+
+		vim.api.nvim_win_set_cursor(0, { 2, 4 })
+		-- An edit lands (e.g. during the debounce window) after analysis but
+		-- before anything re-analyzes; core.state[buf].deps still holds jason.
+		vim.api.nvim_buf_set_lines(buf, 1, 2, false, { '  [{:phoenix, "~> 1.7"}]' })
+
+		local original_ui_open = vim.ui.open
+		local opened
+		vim.ui.open = function(url)
+			opened = url
+		end
+		hex.open()
+		vim.ui.open = original_ui_open
+		is_nil(opened, "open must not open the stale jason snapshot's package")
+
+		local original_notify = vim.notify
+		local warned = 0
+		vim.notify = function(_, level)
+			if level == vim.log.levels.WARN then
+				warned = warned + 1
+			end
+		end
+		hex.versions()
+		hex.info()
+		vim.notify = original_notify
+		hex_api.get_package = original_get_package
+
+		eq(2, warned, "versions and info both warn instead of fetching the stale snapshot")
+
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
+end)
