@@ -6,6 +6,11 @@ local hex_api = require("hex-outdated.hex_api")
 
 local M = {}
 
+-- Ordered, documented `:HexOutdated` subcommands. This array is the single
+-- source of truth: COMMANDS below (built once all M.<action> handlers exist)
+-- derives both the completion candidates and the dispatch table from it, so
+-- the two cannot drift apart. Any other function on M (e.g. M.setup) stays a
+-- legitimate exported Lua API but is never reachable as a subcommand (#78).
 local SUBCOMMANDS = { "refresh", "toggle", "upgrade", "versions", "open", "info", "lock" }
 
 local function is_mixexs(bufnr)
@@ -73,6 +78,16 @@ function M.lock()
 	local st = core.ensure_state(bufnr)
 	st.lock_lens = not st.lock_lens
 	core.refresh_render(bufnr)
+end
+
+-- Subcommand-to-handler lookup, built from SUBCOMMANDS once every M.<action>
+-- above is defined. This is the same table the :HexOutdated command below
+-- uses for both completion (its keys, in SUBCOMMANDS order) and dispatch
+-- (looking up the handler to call) — one explicit table, not two lists that
+-- could drift apart.
+local COMMANDS = {}
+for _, name in ipairs(SUBCOMMANDS) do
+	COMMANDS[name] = M[name]
 end
 
 -- Plugin-owned keymaps per buffer, so they can be removed before re-installing
@@ -216,8 +231,9 @@ function M.setup(opts)
 	end
 	vim.api.nvim_create_user_command("HexOutdated", function(a)
 		local sub = (a.args ~= "" and a.args) or "refresh"
-		if type(M[sub]) == "function" then
-			M[sub]()
+		local fn = COMMANDS[sub]
+		if fn then
+			fn()
 		else
 			vim.notify("hex-outdated: unknown subcommand '" .. sub .. "'", vim.log.levels.ERROR)
 		end

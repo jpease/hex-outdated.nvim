@@ -3,6 +3,7 @@ local hex = require("hex-outdated")
 local core = require("hex-outdated.core")
 local lock = require("hex-outdated.lock")
 local hex_api = require("hex-outdated.hex_api")
+local config = require("hex-outdated.config")
 
 describe("setup", function()
 	hex.setup({ enabled = false }) -- disabled: no network fetch on attach
@@ -449,4 +450,92 @@ describe("read-only actions reject a stale dependency snapshot (issue #67)", fun
 
 		vim.api.nvim_buf_delete(buf, { force = true })
 	end)
+end)
+
+describe("subcommand dispatch restricted to documented commands (issue #78)", function()
+	it("dispatches a documented subcommand (toggle) via :HexOutdated", function()
+		hex.setup({ enabled = false })
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_set_current_buf(buf)
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+		local before = core.state[buf].enabled
+		vim.cmd("HexOutdated toggle")
+		eq(not before, core.state[buf].enabled, "toggle dispatched through :HexOutdated")
+
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
+
+	it("defaults bare :HexOutdated (no args) to refresh", function()
+		local original_analyze = core.analyze
+		local analyze_calls = 0
+		core.analyze = function(...)
+			analyze_calls = analyze_calls + 1
+			return original_analyze(...)
+		end
+
+		local ok, err = pcall(function()
+			hex.setup({ enabled = false })
+			local buf = vim.api.nvim_create_buf(true, false)
+			vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+			vim.api.nvim_set_current_buf(buf)
+			vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+			vim.cmd("HexOutdated")
+			eq(1, analyze_calls, "bare :HexOutdated dispatches to refresh")
+
+			vim.api.nvim_buf_delete(buf, { force = true })
+		end)
+		core.analyze = original_analyze
+		if not ok then
+			error(err)
+		end
+	end)
+
+	it("rejects an unknown subcommand through the existing error path", function()
+		hex.setup({ enabled = false })
+		local original_notify = vim.notify
+		local errors = {}
+		vim.notify = function(msg, level)
+			if level == vim.log.levels.ERROR then
+				errors[#errors + 1] = msg
+			end
+		end
+		vim.cmd("HexOutdated bogus")
+		vim.notify = original_notify
+
+		eq(1, #errors, "unknown subcommand notifies exactly once")
+		contains(errors[1], "unknown subcommand")
+	end)
+
+	it(
+		"does not dispatch 'setup' as a subcommand even though it is an exported function (issue #78)",
+		function()
+			hex.setup({ enabled = false })
+			local original_config_setup = config.setup
+			local setup_calls = 0
+			config.setup = function(...)
+				setup_calls = setup_calls + 1
+				return original_config_setup(...)
+			end
+
+			local original_notify = vim.notify
+			local errors = {}
+			vim.notify = function(msg, level)
+				if level == vim.log.levels.ERROR then
+					errors[#errors + 1] = msg
+				end
+			end
+
+			vim.cmd("HexOutdated setup")
+
+			vim.notify = original_notify
+			config.setup = original_config_setup
+
+			eq(0, setup_calls, ":HexOutdated setup must not re-invoke M.setup/config.setup")
+			eq(1, #errors, "'setup' hits the unknown-subcommand error path")
+			contains(errors[1], "unknown subcommand")
+		end
+	)
 end)
