@@ -289,6 +289,17 @@ local function parse_treesitter(bufnr)
 	-- module. Guessing a name from file text and searching the whole tree is only
 	-- a fallback for files where that chain cannot be followed.
 	local root = tree:root()
+	-- A parse error anywhere in the tree means it cannot be trusted to enumerate
+	-- every dependency tuple: a nested paired sigil delimiter (issue #79) sends
+	-- the external scanner into an ERROR that swallows sibling nodes -- the
+	-- deps tuple never becomes a real AST node at all, rather than merely being
+	-- excluded alongside a clearly-broken one -- so deps can silently vanish
+	-- from the result with no error surfaced to the user. The line-scanning
+	-- fallback has no such failure mode for the same input (`type(root.has_error)`
+	-- guards test doubles that stub a bare tree without that method).
+	if type(root.has_error) == "function" and root:has_error() then
+		return fallback.parse_lines(lines)
+	end
 	local project = find_definition_node(root, bufnr, "project")
 	if project and type(project.type) ~= "function" then
 		project = nil -- test double; nothing to scope against

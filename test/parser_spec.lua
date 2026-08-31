@@ -1449,6 +1449,26 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			-- The installed tree-sitter-elixir grammar mis-scans a sigil whose
+			-- paired delimiter nests (`~s(a (b) do c)`): the resulting ERROR
+			-- swallows the entire next line as sigil content, so the tuple never
+			-- becomes a real AST node and the Treesitter path returns nothing for
+			-- it. `parse_buffer` must defer to the fallback parser whenever the
+			-- tree has any parse error, rather than silently dropping the dep.
+			desc = "nested paired sigil delimiter does not drop the sibling dep (issue #79)",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				"",
+				"  defp deps do",
+				"    x = ~s(a (b) do c)",
+				'    [{:jason, "~> 1.4"}]',
+				"  end",
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is
