@@ -68,6 +68,30 @@ describe("config api.max_concurrent validation (issue #35)", function()
 		assert.are.equal(0, #warnings)
 		assert.are.equal(2, config.options.api.max_concurrent)
 	end)
+
+	it("warns exactly once and clamps to 1 for a NaN value (issue #70)", function()
+		config.setup({ api = { max_concurrent = 0 / 0 } })
+
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("max_concurrent"))
+		assert.are.equal(1, config.options.api.max_concurrent)
+	end)
+
+	it("warns exactly once and clamps to 1 for positive infinity (issue #70)", function()
+		config.setup({ api = { max_concurrent = math.huge } })
+
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("max_concurrent"))
+		assert.are.equal(1, config.options.api.max_concurrent)
+	end)
+
+	it("warns exactly once and clamps to 1 for negative infinity (issue #70)", function()
+		config.setup({ api = { max_concurrent = -math.huge } })
+
+		assert.are.equal(1, #warnings)
+		assert.is_truthy(warnings[1]:find("max_concurrent"))
+		assert.are.equal(1, config.options.api.max_concurrent)
+	end)
 end)
 
 describe("config cache TTL validation (issue #49)", function()

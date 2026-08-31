@@ -667,6 +667,57 @@ describe("api.get_package max_concurrent clamping", function()
 		assert.are.equal(2, system_calls) -- both slots available; no queuing
 		assert.are.equal(0, #warnings)
 	end)
+
+	it("clamps NaN to 1 without warning (issue #70)", function()
+		local done = false
+		api.get_package("a", { max_concurrent = 0 / 0 }, function()
+			done = true
+		end)
+		complete_last()
+
+		assert.is_true(done)
+		assert.are.equal(1, system_calls)
+		assert.are.equal(0, #warnings)
+	end)
+
+	it("clamps positive infinity to 1, enforcing the concurrency cap (issue #70)", function()
+		-- A single call can't detect this: 0 < math.huge is true either way, so it
+		-- spawns regardless of whether the clamp ran. The real defect is that an
+		-- unclamped math.huge is stored as the module's max_concurrent, silently
+		-- disabling the cap for every call after this one — so assert the cap
+		-- itself by queuing a second request behind the first.
+		api.get_package("a", { max_concurrent = math.huge }, function() end)
+		api.get_package("b", { max_concurrent = math.huge }, function() end)
+
+		assert.are.equal(1, system_calls) -- capped at 1: "b" queued behind "a"
+		assert.are.equal(0, #warnings)
+
+		complete_last()
+		assert.are.equal(2, system_calls) -- the queue drains once "a" finishes
+	end)
+
+	it("clamps negative infinity to 1 without warning (issue #70)", function()
+		local done = false
+		api.get_package("a", { max_concurrent = -math.huge }, function()
+			done = true
+		end)
+		complete_last()
+
+		assert.is_true(done)
+		assert.are.equal(1, system_calls)
+		assert.are.equal(0, #warnings)
+	end)
+
+	it("does not leave requests queued forever when max_concurrent is NaN (issue #70)", function()
+		api.get_package("a", { max_concurrent = 0 / 0 }, function() end)
+		api.get_package("b", { max_concurrent = 0 / 0 }, function() end)
+
+		assert.are.equal(1, system_calls) -- "b" queued behind "a", not stalled
+
+		complete_last()
+
+		assert.are.equal(2, system_calls) -- the queue drains once "a" finishes
+	end)
 end)
 
 -- get_package's own clamp is a silent defensive fallback (issue #49), mirroring

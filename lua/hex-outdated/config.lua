@@ -46,7 +46,13 @@ M.options = util.deep_merge(M.defaults, {})
 
 local function validate_max_concurrent(o)
 	local mc = o.api.max_concurrent
-	if type(mc) ~= "number" or math.floor(mc) < 1 then
+	if
+		type(mc) ~= "number"
+		or mc ~= mc
+		or mc == math.huge
+		or mc == -math.huge
+		or math.floor(mc) < 1
+	then
 		vim.notify(
 			string.format(
 				"hex-outdated: api.max_concurrent must be a positive integer (got %s); using 1",

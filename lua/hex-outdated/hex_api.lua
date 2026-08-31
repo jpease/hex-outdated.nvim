@@ -239,7 +239,13 @@ function M.get_package(name, opts, callback)
 		-- Config-level validation (config.setup) already warns once for invalid
 		-- values; this is a silent defensive clamp for callers that bypass it.
 		local mc = opts.max_concurrent
-		if type(mc) ~= "number" or math.floor(mc) < 1 then
+		if
+			type(mc) ~= "number"
+			or mc ~= mc
+			or mc == math.huge
+			or mc == -math.huge
+			or math.floor(mc) < 1
+		then
 			max_concurrent = 1
 		else
 			max_concurrent = math.floor(mc)
