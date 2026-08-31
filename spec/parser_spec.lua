@@ -125,6 +125,81 @@ describe("parser.parse_lines (fallback)", function()
 		assert.are.equal("~> 2.3", wrapped_req_line:sub(deps[2].col_start + 1, deps[2].col_end))
 	end)
 
+	it("recognizes 'do:' on the line after a zero-arity 'name(),' head (issue #68)", function()
+		local deps = parser.parse_lines({
+			"defp deps(),",
+			'  do: [{:jason, "~> 1.4"}]',
+			"",
+			"defp unrelated,",
+			'  do: [{:poison, "~> 5.0"}]',
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("recognizes 'do:' on the line after a zero-arity 'name,' head (issue #68)", function()
+		local deps = parser.parse_lines({
+			"defp deps,",
+			'  do: [{:jason, "~> 1.4"}]',
+			"",
+			"defp unrelated,",
+			'  do: [{:poison, "~> 5.0"}]',
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("stops at a wrapped keyword-form body, excluding a later function (issue #68)", function()
+		local deps = parser.parse_lines({
+			"def project, do: [deps: deps()]",
+			"",
+			"defp deps(),",
+			'  do: [{:jason, "~> 1.4"}]',
+			"",
+			"defp unrelated,",
+			'  do: [{:poison, "~> 5.0"}]',
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
+	it("keeps a nonzero-arity wrapped head excluded with a trailing comma (issue #68)", function()
+		local deps = parser.parse_lines({
+			"defp deps(x),",
+			'  do: [{:wrong, "~> 1.0"}]',
+		})
+
+		assert.are.equal(0, #deps)
+	end)
+
+	it("keeps a wrapped nonzero-arity multi-line head excluded (issue #68)", function()
+		local deps = parser.parse_lines({
+			"defp deps(",
+			"  x",
+			"),",
+			'  do: [{:wrong, "~> 1.0"}]',
+		})
+
+		assert.are.equal(0, #deps)
+	end)
+
+	it("resolves 'do:' after a wrapped empty-parens multi-line signature (issue #68)", function()
+		local deps = parser.parse_lines({
+			"defp deps(",
+			"),",
+			'  do: [{:jason, "~> 1.4"}]',
+			"",
+			"defp unrelated,",
+			'  do: [{:poison, "~> 5.0"}]',
+		})
+
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+	end)
+
 	it("excludes nested list literals inside a multi-line assignment (issue #31)", function()
 		local deps = parser.parse_lines({
 			"defp deps do",

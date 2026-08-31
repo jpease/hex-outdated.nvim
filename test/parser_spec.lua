@@ -1391,6 +1391,26 @@ describe("parser parity: treesitter vs fallback", function()
 				"end",
 			},
 		},
+		{
+			-- The fallback's `new_head_matcher` decided `defp deps(),` was block
+			-- form as soon as it saw the closing paren, without checking the next
+			-- line for a wrapped `do:`. Scanning then never found a closing `end`
+			-- (there is none -- this is keyword form) and leaked into `unrelated`'s
+			-- own `do:` body.
+			desc = "wrapped 'do:' after a zero-arity head does not leak into the next function (issue #68)",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				"",
+				"  defp deps(),",
+				'    do: [{:jason, "~> 1.4"}]',
+				"",
+				"  defp unrelated,",
+				'    do: [{:poison, "~> 5.0"}]',
+				"end",
+			},
+		},
 	}
 
 	-- Project a dep list to the fields both parsers populate, so a deep-compare is

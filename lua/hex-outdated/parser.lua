@@ -378,7 +378,24 @@ end
 -- persists correctly across the lines of a wrapped signature.
 local function new_head_matcher(name)
 	local pending -- { indent = ..., parts = { accumulated pre-")" text } }
+	-- A zero-arity head whose signature closed with nothing but a trailing
+	-- comma (no `do:` yet on that same line) -- e.g. `defp deps(),` or
+	-- `defp deps,`, wrapped so the keyword-form body's `do:` starts on the
+	-- next line. Only that next line can resolve this: a leading `do:`
+	-- confirms the keyword-form match; anything else gives up rather than
+	-- guessing block form. Kept separate from `pending`, which accumulates a
+	-- still-open multi-line signature -- this instead awaits the line after
+	-- an already-closed one.
+	local pending_do -- { indent = ... }
 	return function(line)
+		if pending_do then
+			local indent = pending_do.indent
+			pending_do = nil
+			if line:match("^%s*do%s*:") then
+				return indent, true
+			end
+			return nil
+		end
 		if pending then
 			local before, after = line:match("^(.-)%)(.*)$")
 			if not before then
@@ -392,7 +409,14 @@ local function new_head_matcher(name)
 			if params:match("%S") then
 				return nil
 			end
-			return indent, after:find(",%s*do%s*:") ~= nil
+			if after:find(",%s*do%s*:") then
+				return indent, true
+			end
+			if after:match("^%s*,%s*$") then
+				pending_do = { indent = indent }
+				return nil
+			end
+			return indent, false
 		end
 		local indent, rest = line:match("^(%s*)defp?%s+(.*)")
 		if not rest then
@@ -404,7 +428,14 @@ local function new_head_matcher(name)
 		end
 		local paren_rest = after:match("^%s*%((.*)$")
 		if not paren_rest then
-			return indent, line:find(",%s*do%s*:") ~= nil
+			if line:find(",%s*do%s*:") then
+				return indent, true
+			end
+			if after:match("^%s*,%s*$") then
+				pending_do = { indent = indent }
+				return nil
+			end
+			return indent, false
 		end
 		local before, tail = paren_rest:match("^(.-)%)(.*)$")
 		if not before then
@@ -414,7 +445,14 @@ local function new_head_matcher(name)
 		if before:match("%S") then
 			return nil
 		end
-		return indent, tail:find(",%s*do%s*:") ~= nil
+		if tail:find(",%s*do%s*:") then
+			return indent, true
+		end
+		if tail:match("^%s*,%s*$") then
+			pending_do = { indent = indent }
+			return nil
+		end
+		return indent, false
 	end
 end
 
