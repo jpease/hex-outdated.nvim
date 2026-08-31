@@ -160,14 +160,14 @@ require("hex-outdated").setup({
     timeout_ms = 5000,          -- invalid/non-positive values use 5000
     max_concurrent = 8,        -- cap on simultaneous curl processes
   },
-  cache = {
-    ttl_seconds = 3600,
-    error_ttl_seconds = 60,    -- how long a failed fetch is cached before retry
-  },
   lock = {
     enabled = true,            -- read mix.lock when present
     lens = false,              -- locked-version lens; off by default
     stale_diagnostic = true,   -- warn when the lock no longer satisfies the requirement
+  },
+  cache = {
+    ttl_seconds = 3600,
+    error_ttl_seconds = 60,    -- how long a failed fetch is cached before retry
   },
   text = {                   -- %s is the latest version
     up_to_date = "✓ %s",
