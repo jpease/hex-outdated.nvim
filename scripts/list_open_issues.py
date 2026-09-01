@@ -1,1 +1,0 @@
-../../scripts/list_open_issues.py

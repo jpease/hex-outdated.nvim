@@ -15,3 +15,6 @@ CLAUDE.md
 
 # Raven guided-merge scratch artifacts
 .raven/merge/
+
+# Machine-local just recipes, pulled in by `import? 'private.just'`
+private.just

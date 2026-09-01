@@ -1,3 +1,7 @@
+# Machine-local recipes (not committed). Absent in a fresh clone; `import?`
+# skips it silently rather than erroring.
+import? 'private.just'
+
 # Run the pure busted suite (no Neovim required)
 test:
     busted
@@ -37,10 +41,6 @@ check: check-fast test test-nvim
 audit:
     @echo "No dependency audit for Lua: osv-scanner reads no LuaRocks manifest."
     @echo "Rock dependencies are NOT covered by 'just audit' -- treat this as a known gap."
-
-# List open issues with hierarchy and priority
-list-open:
-    ./scripts/list_open_issues.py
 
 # Install pre-commit (fast checks) and pre-push (full check) git hooks
 install-hooks:
