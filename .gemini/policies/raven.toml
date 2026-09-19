@@ -1,0 +1,39 @@
+# RAVEN command approval policy for Gemini CLI.
+#
+# Complements hook-based guardrails; hooks remain the stronger enforcement
+# layer for contextual checks.
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "rm -rf /"
+decision = "deny"
+denyMessage = "Refusing destructive deletion of the filesystem root."
+priority = 900
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git reset --hard"
+decision = "ask_user"
+denyMessage = "Hard reset can discard local work; require explicit approval."
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "git clean -fdx"
+decision = "ask_user"
+denyMessage = "git clean -fdx removes untracked work and state; require explicit approval."
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "kubectl delete"
+decision = "ask_user"
+denyMessage = "Kubernetes deletion can affect live resources; require explicit approval."
+priority = 100
+
+[[rule]]
+toolName = "run_shell_command"
+commandPrefix = "dropdb"
+decision = "ask_user"
+denyMessage = "Database deletion requires explicit approval."
+priority = 100

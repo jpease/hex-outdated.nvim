@@ -18,3 +18,35 @@ CLAUDE.md
 
 # Machine-local just recipes, pulled in by `import? 'private.just'`
 private.just
+
+# Raven: mirrors of untracked .agents/skills entries (.claude/skills is what Claude Code reads)
+.claude/skills/gitnexus-cli/
+.claude/skills/gitnexus-debugging/
+.claude/skills/gitnexus-exploring/
+.claude/skills/gitnexus-guide/
+.claude/skills/gitnexus-impact-analysis/
+.claude/skills/gitnexus-refactoring/
+.claude/skills/raven-codebase-discovery/
+.claude/skills/raven-commit/
+.claude/skills/raven-debloat/
+.claude/skills/raven-debug-failure/
+.claude/skills/raven-delegate-or-inline/
+.claude/skills/raven-dependency-update/
+.claude/skills/raven-doc-sync/
+.claude/skills/raven-github-issues/
+.claude/skills/raven-implement-feature/
+.claude/skills/raven-plan/
+.claude/skills/raven-project-lifecycle/
+.claude/skills/raven-review-pr/
+.claude/skills/raven-review-prose/
+.claude/skills/raven-safe-refactor/
+.claude/skills/raven-security-review/
+.claude/skills/raven-skeleton/
+.claude/skills/raven-task-complete/
+.claude/skills/raven-tool-bootstrap/
+.claude/skills/raven-triage-discovery/
+.claude/skills/raven-write-prose/
+.claude/skills/raven-write-tests/
+
+# Raven's hooks and helper scripts are Python; CPython writes bytecode beside them
+__pycache__/
