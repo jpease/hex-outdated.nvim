@@ -1,209 +1,31 @@
--- Treesitter parsing path against real Neovim. Falls back to skip when the
--- elixir parser is not installed (the pure pattern parser is covered in spec/).
+-- Tree-sitter backend and its parity with the line scanner, in real Neovim.
+-- With HEX_OUTDATED_REQUIRE_TS=1 a missing elixir parser fails instead of skipping.
 local parser = require("hex-outdated.parser")
+local fallback = require("hex-outdated.parser.fallback")
 
-describe("parser fallback", function()
-	it("scopes parsing to the configured dependency function and records aliases", function()
-		local deps = parser.parse_lines({
-			"def project do",
-			'  [deps: project_deps(), example: {:not_a_dep, "1.0.0"}]',
-			"end",
-			"defp project_deps do",
-			'  # {:commented, "~> 1.0"}',
-			'  [{:local_app, "~> 2.0", hex: :actual_package}]',
-			"end",
-		})
-
-		eq(1, #deps)
-		eq("local_app", deps[1].name)
-		eq("actual_package", deps[1].package)
+-- True when the elixir parser is installed; otherwise registers a test that
+-- skips, or fails when HEX_OUTDATED_REQUIRE_TS=1.
+local function elixir_parser_available()
+	-- `language.add` returns nil rather than erroring when the parser is missing.
+	local ok, added = pcall(vim.treesitter.language.add, "elixir")
+	if ok and added then
+		return true
+	end
+	it("has the elixir Treesitter parser", function()
+		if vim.env.HEX_OUTDATED_REQUIRE_TS == "1" then
+			error("elixir parser not installed but HEX_OUTDATED_REQUIRE_TS=1")
+		end
+		skip("elixir parser not installed")
 	end)
+	return false
+end
 
-	it("ignores non-dep tuples in assignment context (issue #25)", function()
-		local deps = parser.parse_lines({
-			"defp deps do",
-			'  metadata = {:ok, "not-a-dep"}',
-			'  [{:jason, "~> 1.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-	end)
-
-	it("selects deps/0 when deps/1 appears first (issue #27)", function()
-		local deps = parser.parse_lines({
-			"defp deps(env) do",
-			'  [{:wrong, "~> 1.0"}]',
-			"end",
-			"defp deps do",
-			'  [{:correct, "~> 2.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("correct", deps[1].name)
-	end)
-
-	it("ignores a tuple inside an assignment-context list (issue #25)", function()
-		local deps = parser.parse_lines({
-			"defp deps do",
-			'  statuses = [{:ok, "not-a-dep"}]',
-			'  [{:jason, "~> 1.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-	end)
-
-	it("treats deps() with explicit empty parens as arity 0 (issue #27)", function()
-		local deps = parser.parse_lines({
-			'defp deps(), do: [{:jason, "~> 1.0"}]',
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-	end)
-
-	it("parses a dep list assigned to a returned variable (issue #30)", function()
-		local deps = parser.parse_lines({
-			"defp deps do",
-			"  deps = [",
-			'    {:jason, "~> 1.0"}',
-			"  ]",
-			"  deps",
-			"end",
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-		eq("~> 1.0", deps[1].requirement)
-	end)
-
-	it("excludes an assignment list that is not the returned variable (issue #30)", function()
-		local deps = parser.parse_lines({
-			"defp deps do",
-			'  statuses = [{:ok, "not-a-dep"}]',
-			'  deps = [{:jason, "~> 1.0"}]',
-			"  deps",
-			"end",
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-	end)
-
-	it("excludes a nested list inside a multi-line assignment (issue #31)", function()
-		local deps = parser.parse_lines({
-			"defp deps do",
-			"  metadata =",
-			"    if true do",
-			'      [{:ok, "not-a-dep"}]',
-			"    end",
-			"",
-			'  [{:jason, "~> 1.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-		eq("~> 1.0", deps[1].requirement)
-	end)
-
-	it("finds the dep list after a flush-left nested block end (issue #47)", function()
-		local deps = parser.parse_lines({
-			"defp deps do",
-			"if true do",
-			"  ignored = :ok",
-			"end",
-			'[{:jason, "~> 1.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-		eq("~> 1.0", deps[1].requirement)
-	end)
-
-	it("resumes dep-scanning after deeply nested flush-left blocks (issue #47)", function()
-		local deps = parser.parse_lines({
-			"defp deps do",
-			"if true do",
-			"if false do",
-			"  ignored = :ok",
-			"end",
-			"end",
-			'[{:jason, "~> 1.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("jason", deps[1].name)
-		eq("~> 1.0", deps[1].requirement)
-	end)
-
-	it("selects deps/0 when a multi-line deps/1 appears first (issue #51)", function()
-		local deps = parser.parse_lines({
-			"defp deps(",
-			"  env",
-			") do",
-			'  [{:wrong, "~> 1.0"}]',
-			"end",
-			"",
-			"defp deps do",
-			'  [{:correct, "~> 2.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("correct", deps[1].name)
-	end)
-
-	it("treats a multi-line empty deps() head as arity 0 (issue #51)", function()
-		local deps = parser.parse_lines({
-			"defp deps(",
-			") do",
-			'  [{:only_dep, "~> 1.0"}]',
-			"end",
-		})
-		eq(1, #deps)
-		eq("only_dep", deps[1].name)
-	end)
-
-	-- `locate_project` (added by #61) carried the identical whole-line-close
-	-- asymmetry the other two sites had: its close test was also the
-	-- `^%s*end%s*$` whole-line match. Here `project/0`'s body over-extended
-	-- past its own `end)`, swallowing `defp other`, whose `deps:
-	-- other_deps()` then hijacked `configured_dep_function`'s narrowed
-	-- search window -- even though `project/0` has no `deps:` key of its own
-	-- and the correct dep function is the default `deps/0`.
-	--
-	-- This is fallback-only rather than a treesitter/fallback parity case:
-	-- `locate_project` is a fallback-parser-only function (`parse_treesitter`
-	-- never calls it), and this exact input also happens to trip an
-	-- unrelated, pre-existing scoping gap in `parse_treesitter`'s own
-	-- `configured_dep_function(lines)` call (it searches the whole file for
-	-- `deps: name()` text with no first/last narrowing, unlike the fallback's
-	-- call), so treesitter independently returns "wrong" for reasons
-	-- unconnected to any of #63's three call sites. See the report to the
-	-- issue author.
-	it("does not let 'end)' desync locate_project's body range (issue #63)", function()
-		local deps = parser.parse_lines({
-			"defmodule Demo.MixProject do",
-			"  def project do",
-			"    _ = Enum.map([], fn x ->",
-			"      x",
-			"    end)",
-			"",
-			"    [app: :demo]",
-			"  end",
-			"",
-			"  defp other, do: [deps: other_deps()]",
-			"",
-			"  defp deps do",
-			'    [{:real, "~> 1.0"}]',
-			"  end",
-			"",
-			"  defp other_deps do",
-			'    [{:wrong, "~> 2.0"}]',
-			"  end",
-			"end",
-		})
-		eq(1, #deps)
-		eq("real", deps[1].name)
-	end)
-end)
+local function parse_buffer(lines)
+	local b = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+	vim.bo[b].filetype = "elixir"
+	return parser.parse_buffer(b)
+end
 
 local MIX = {
 	"defmodule App.MixProject do",
@@ -223,23 +45,12 @@ local MIX = {
 }
 
 describe("parser (treesitter)", function()
-	-- `language.add` returns nil (not an error) when the parser is missing, so a
-	-- bare pcall is not enough — require a truthy return before exercising the path.
-	local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
-	if not (added_ok and added) then
-		it("treesitter elixir path", function()
-			skip("elixir parser not installed")
-		end)
+	if not elixir_parser_available() then
 		return
 	end
 
-	local buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, MIX)
-	vim.bo[buf].filetype = "elixir"
-	local deps = parser.parse_buffer(buf)
-
 	local by_name = {}
-	for _, d in ipairs(deps) do
+	for _, d in ipairs(parse_buffer(MIX)) do
 		by_name[d.name] = d
 	end
 
@@ -264,328 +75,33 @@ describe("parser (treesitter)", function()
 	it("reports the requirement span inside the quotes", function()
 		local d = by_name.jason
 		eq(6, d.row, "0-indexed row of the jason line")
-		-- col_start sits just inside the opening quote; the slice is the requirement.
 		local line = MIX[d.row + 1]
 		eq("~> 1.0", line:sub(d.col_start + 1, d.col_end))
 	end)
 
-	it("ignores assignment-context tuples inside deps function (issue #25)", function()
-		local mix_nondep = {
+	it("pairs a name only with the string directly after it", function()
+		local result = parse_buffer({
 			"defmodule App.MixProject do",
-			"  defp deps do",
-			'    metadata = {:ok, "not-a-dep"}',
-			'    [{:jason, "~> 1.0"}]',
-			"  end",
+			'  defp deps, do: [{:a, :b, "x"}, {:jason, "~> 1.4", "extra"}]',
 			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_nondep)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
+		})
 		eq(1, #result)
-		eq("jason", result[1].name)
-	end)
-
-	it("selects deps/0 when deps/1 appears first (issue #27)", function()
-		local mix_arity = {
-			"defmodule App.MixProject do",
-			"  defp deps(env) do",
-			'    [{:wrong, "~> 1.0"}]',
-			"  end",
-			"  defp deps do",
-			'    [{:correct, "~> 2.0"}]',
-			"  end",
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_arity)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("correct", result[1].name)
-	end)
-
-	it("ignores a tuple inside an assignment-context list (issue #25)", function()
-		local mix_assign = {
-			"defmodule App.MixProject do",
-			"  defp deps do",
-			'    statuses = [{:ok, "not-a-dep"}]',
-			'    [{:jason, "~> 1.0"}]',
-			"  end",
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_assign)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("jason", result[1].name)
-	end)
-
-	it("treats deps() with explicit empty parens as arity 0 (issue #27)", function()
-		local mix_empty_parens = {
-			"defmodule App.MixProject do",
-			'  defp deps(), do: [{:jason, "~> 1.0"}]',
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_empty_parens)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("jason", result[1].name)
-	end)
-
-	it("parses a dep list assigned to a returned variable (issue #30)", function()
-		local mix_returned_var = {
-			"defmodule App.MixProject do",
-			"  defp deps do",
-			"    deps = [",
-			'      {:jason, "~> 1.0"}',
-			"    ]",
-			"    deps",
-			"  end",
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_returned_var)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("jason", result[1].name)
-		eq("~> 1.0", result[1].requirement)
-	end)
-
-	it("excludes a nested list inside a multi-line assignment (issue #31)", function()
-		local mix_nested_assign = {
-			"defmodule App.MixProject do",
-			"  defp deps do",
-			"    metadata =",
-			"      if true do",
-			'        [{:ok, "not-a-dep"}]',
-			"      end",
-			"",
-			'    [{:jason, "~> 1.0"}]',
-			"  end",
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_nested_assign)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("jason", result[1].name)
-		eq("~> 1.0", result[1].requirement)
-	end)
-
-	it("finds deps inlined directly in project() with no deps/0 function (issue #42)", function()
-		local mix_inline_deps = {
-			"defmodule Demo.MixProject do",
-			"  use Mix.Project",
-			"  def project do",
-			"    [",
-			"      app: :demo,",
-			'      version: "0.1.0",',
-			'      deps: [{:jason, "~> 1.4"}, {:plug, "~> 1.15"}]',
-			"    ]",
-			"  end",
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_inline_deps)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(2, #result)
 		eq("jason", result[1].name)
 		eq("~> 1.4", result[1].requirement)
-		eq("plug", result[2].name)
-		eq("~> 1.15", result[2].requirement)
 	end)
-
-	it(
-		"resolves a custom dependency function whose call wraps onto the next line (issue #55)",
-		function()
-			local mix_multiline_deps_value = {
-				"defmodule My.MixProject do",
-				"  use Mix.Project",
-				"  def project do",
-				"    [deps:",
-				"      project_deps()]",
-				"  end",
-				"  defp project_deps do",
-				'    [{:jason, "~> 1.4"}]',
-				"  end",
-				"end",
-			}
-			local b = vim.api.nvim_create_buf(false, true)
-			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_multiline_deps_value)
-			vim.bo[b].filetype = "elixir"
-			local result = parser.parse_buffer(b)
-			eq(1, #result)
-			eq("jason", result[1].name)
-			eq("~> 1.4", result[1].requirement)
-		end
-	)
-
-	it(
-		"resolves an inline deps list wrapped onto the next line via the AST"
-			.. " (issue #55, no custom-function match needed)",
-		function()
-			local mix_wrapped_inline_list = {
-				"defmodule Demo.MixProject do",
-				"  use Mix.Project",
-				"  def project do",
-				"    [",
-				"      deps:",
-				'      [{:jason, "~> 1.4"}]',
-				"    ]",
-				"  end",
-				"end",
-			}
-			local b = vim.api.nvim_create_buf(false, true)
-			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_wrapped_inline_list)
-			vim.bo[b].filetype = "elixir"
-			local result = parser.parse_buffer(b)
-			eq(1, #result)
-			eq("jason", result[1].name)
-		end
-	)
-
-	it("resolves a one-line project/0 with an inline deps list (issue #61)", function()
-		local mix_one_line_inline = {
-			"defmodule Demo.MixProject do",
-			'  def project, do: [deps: [{:real, "~> 1.0"}]]',
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_one_line_inline)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("real", result[1].name)
-		eq("~> 1.0", result[1].requirement)
-	end)
-
-	it("resolves a one-line project/0 delegating to a dep function (issue #61)", function()
-		local mix_one_line_delegating = {
-			"defmodule Demo.MixProject do",
-			"  def project, do: [deps: custom_deps()]",
-			'  defp custom_deps, do: [{:real, "~> 2.0"}]',
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_one_line_delegating)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("real", result[1].name)
-		eq("~> 2.0", result[1].requirement)
-	end)
-
-	it("ignores a colliding dep function in a nested module (issue #61)", function()
-		local mix_nested_module = {
-			"defmodule Demo.MixProject do",
-			"  defmodule Inner do",
-			'    def deps, do: [{:wrong, "~> 1.0"}]',
-			"  end",
-			"  def project do",
-			"    [deps: deps()]",
-			"  end",
-			"  defp deps do",
-			'    [{:real, "~> 2.0"}]',
-			"  end",
-			"end",
-		}
-		local b = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_nested_module)
-		vim.bo[b].filetype = "elixir"
-		local result = parser.parse_buffer(b)
-		eq(1, #result)
-		eq("real", result[1].name)
-	end)
-
-	it(
-		"does not let a sibling function's 'deps:' fragment redirect the dep-function guess (issue #65)",
-		function()
-			local mix_sibling_deps_fragment = {
-				"defmodule Demo.MixProject do",
-				"  def project do",
-				"    [app: :demo]",
-				"  end",
-				"",
-				"  defp other, do: [deps: other_deps()]",
-				"",
-				"  defp deps do",
-				'    [{:real, "~> 1.0"}]',
-				"  end",
-				"",
-				"  defp other_deps do",
-				'    [{:wrong, "~> 2.0"}]',
-				"  end",
-				"end",
-			}
-			local b = vim.api.nvim_create_buf(false, true)
-			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_sibling_deps_fragment)
-			vim.bo[b].filetype = "elixir"
-			local result = parser.parse_buffer(b)
-			eq(1, #result)
-			eq("real", result[1].name)
-		end
-	)
-
-	it(
-		"does not let a 'deps:' fragment in a @doc string / attribute redirect the guess (issue #65)",
-		function()
-			local mix_doc_string_fragment = {
-				"defmodule Demo.MixProject do",
-				'  @source_url "deps: fake()"',
-				"",
-				"  def project do",
-				"    [app: :demo]",
-				"  end",
-				"",
-				'  @doc "deps: fake()"',
-				"  defp other, do: :ok",
-				"",
-				"  defp deps do",
-				'    [{:real, "~> 1.0"}]',
-				"  end",
-				"end",
-			}
-			local b = vim.api.nvim_create_buf(false, true)
-			vim.api.nvim_buf_set_lines(b, 0, -1, false, mix_doc_string_fragment)
-			vim.bo[b].filetype = "elixir"
-			local result = parser.parse_buffer(b)
-			eq(1, #result)
-			eq("real", result[1].name)
-		end
-	)
 end)
 
--- Parity contract: the Treesitter path (parse_buffer) and the Lua-pattern fallback
--- (parse_lines) independently implement the same dependency-extraction rules —
--- arity-0 selection, assignment-RHS exclusion, alias resolution, and dep-list
--- scoping. They must agree on well-formed mix.exs input. These cases pin that
--- invariant so a rule added to one path cannot silently drift from the other.
--- (parse_lines is pure Lua, so it runs in this headless suite alongside real
--- Treesitter, letting us cross-check both parsers in one process.)
+-- Both backends must agree on well-formed mix.exs input.
 describe("parser parity: treesitter vs fallback", function()
-	local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
-	if not (added_ok and added) then
-		it("treesitter elixir path", function()
-			skip("elixir parser not installed")
-		end)
+	if not elixir_parser_available() then
 		return
 	end
 
-	-- Each case is a complete, valid mix.exs snippet exercising one shared rule.
-	-- `expect`, when present, is the exact list of dep names both paths must
-	-- return. Cases without it assert agreement only; a case whose bug makes both
-	-- paths agree on the *wrong* answer (e.g. both returning nothing) must set it,
-	-- or the parity assertion alone would pass without testing anything.
+	-- `expect` is the exact dep name list both backends must return.
 	local CASES = {
 		{
 			desc = "hex deps with scm tuples skipped",
+			expect = { "phoenix", "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -600,6 +116,7 @@ describe("parser parity: treesitter vs fallback", function()
 		},
 		{
 			desc = "aliased package via custom deps function",
+			expect = { "local_app" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  def project do",
@@ -612,7 +129,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "assignment-RHS tuple excluded (issue #25)",
+			desc = "assignment-RHS tuple excluded",
+			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -623,7 +141,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "assignment-RHS list excluded (issue #25)",
+			desc = "assignment-RHS list excluded",
+			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -634,7 +153,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "deps/0 selected over deps/1 (issue #27)",
+			desc = "deps/0 selected over deps/1",
+			expect = { "correct" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps(env) do",
@@ -647,7 +167,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "dep list assigned to a returned variable (issue #30)",
+			desc = "dep list assigned to a returned variable",
+			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -660,7 +181,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "assignment list excluded while returned variable kept (issue #30)",
+			desc = "assignment list excluded while returned variable kept",
+			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -672,7 +194,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "nested list inside a multi-line assignment excluded (issue #31)",
+			desc = "nested list inside a multi-line assignment excluded",
+			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -687,7 +210,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "dep requirement string wrapped to the next line (issue #41)",
+			desc = "dep requirement string wrapped to the next line",
+			expect = { "short_dep", "a_very_long_package_name_here" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -701,7 +225,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "dep list found after a flush-left nested block end (issue #47)",
+			desc = "dep list found after a flush-left nested block end",
+			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -714,7 +239,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "deps/0 selected over a multi-line deps/1 (issue #51)",
+			desc = "deps/0 selected over a multi-line deps/1",
+			expect = { "correct" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps(",
@@ -729,7 +255,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "multi-line empty deps() head treated as arity 0 (issue #51)",
+			desc = "multi-line empty deps() head treated as arity 0",
+			expect = { "only_dep" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps(",
@@ -740,7 +267,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "deps inlined directly in project() with no deps/0 function (issue #42)",
+			desc = "deps inlined directly in project() with no deps/0 function",
+			expect = { "jason", "plug" },
 			lines = {
 				"defmodule Demo.MixProject do",
 				"  use Mix.Project",
@@ -755,7 +283,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "custom dependency function call wraps onto the next line (issue #55)",
+			desc = "custom dependency function call wraps onto the next line",
+			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  def project do",
@@ -769,7 +298,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "'do' inside a string requirement not treated as a block opener (issue #57)",
+			desc = "'do' inside a string requirement not treated as a block opener",
+			expect = { "real" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -782,7 +312,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "'fn' inside a string requirement not treated as a block opener (issue #57)",
+			desc = "'fn' inside a string requirement not treated as a block opener",
+			expect = { "real" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -795,7 +326,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "':do' option atom not treated as a block opener (issue #57)",
+			desc = "':do' option atom not treated as a block opener",
+			expect = { "real" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -808,7 +340,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "':fn' option atom not treated as a block opener (issue #57)",
+			desc = "':fn' option atom not treated as a block opener",
+			expect = { "real" },
 			lines = {
 				"defmodule App.MixProject do",
 				"  defp deps do",
@@ -821,7 +354,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "colliding deps/0 in an earlier module ignored (issue #61, repro A)",
+			desc = "colliding deps/0 in an earlier module ignored",
 			expect = { "real" },
 			lines = {
 				"defmodule Helper do",
@@ -835,7 +368,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "colliding deps/0 in a later module ignored (issue #61)",
+			desc = "colliding deps/0 in a later module ignored",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -855,7 +388,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "colliding deps/0 in a nested module ignored (issue #61)",
+			desc = "colliding deps/0 in a nested module ignored",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -872,7 +405,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "'deps: name()' text inside a string literal ignored (issue #61, repro B)",
+			desc = "'deps: name()' text inside a string literal ignored",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -883,7 +416,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "one-line project/0 with an inline deps list (issue #61, repro C)",
+			desc = "one-line project/0 with an inline deps list",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -892,7 +425,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "one-line project/0 delegating to a custom dep function (issue #61)",
+			desc = "one-line project/0 delegating to a custom dep function",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -902,7 +435,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "inline deps list in another module ignored (issue #61)",
+			desc = "inline deps list in another module ignored",
 			expect = { "real" },
 			lines = {
 				"defmodule Helper do",
@@ -915,9 +448,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Criterion: a file with no locatable project/0 must keep resolving via
-			-- the whole-file dep-function search rather than returning nothing.
-			desc = "dep function found with no project/0 in the file (issue #61)",
+			desc = "dep function found with no project/0 in the file",
 			expect = { "jason" },
 			lines = {
 				"defmodule App.MixProject do",
@@ -931,12 +462,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- The Treesitter path's whole-file text guess for the dep-function name
-			-- (used when project/0's returned list has no resolvable `deps:` key)
-			-- must be scoped to project/0's own body, exactly like the fallback path
-			-- already is. Before the fix, this fragment inside a sibling function's
-			-- own `deps:` pair hijacked the guess and both paths disagreed.
-			desc = "sibling function's 'deps:' fragment does not redirect the guess (issue #65)",
+			desc = "sibling function's 'deps:' fragment does not redirect the default",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -957,7 +483,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "'deps:' fragment in a @doc string does not redirect the guess (issue #65)",
+			desc = "'deps:' fragment in a @doc string does not redirect the default",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -975,7 +501,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "'deps:' fragment in a module attribute does not redirect the guess (issue #65)",
+			desc = "'deps:' fragment in a module attribute does not redirect the default",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -992,11 +518,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- `_` is not in Lua's `%w` class, so the old `%f[%w]do%f[%W]` frontier
-			-- fired across it: an atom value merely *containing* `_fn` (here
-			-- `only: :my_fn`) was miscounted as an `fn` block opener, `block_depth`
-			-- never returned to zero, and `unrelated`'s tuple leaked in.
-			desc = "atom value ending in '_fn' not treated as a block opener (issue #58, repro A)",
+			desc = "atom value ending in '_fn' not treated as a block opener",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1011,7 +533,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "bare identifier ending in '_do' not treated as a block opener (issue #58, repro B)",
+			desc = "bare identifier ending in '_do' not treated as a block opener",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1027,11 +549,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Prefix form: the closing frontier `%f[%W]` fired on the trailing `_`
-			-- just as the opening one fired on a leading `_`, so `do_`-prefixed
-			-- identifiers (a common recursive-helper naming convention in Elixir)
-			-- reproduced identically to the suffix forms above.
-			desc = "identifier starting with 'do_' not treated as a block opener (issue #58, repro C)",
+			desc = "identifier starting with 'do_' not treated as a block opener",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1047,12 +565,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- #61's `count_closers` scans for `end` with the identical `_`-boundary
-			-- bug: `end_of_list` was miscounted as a block closer, popping the
-			-- `defmodule` entry in `module_ranges` early so `module_scope` truncated
-			-- before `deps/0`, which then fell outside the scope `configured_dep_function`
-			-- and the head matcher are restricted to.
-			desc = "identifier containing 'end_' not treated as a block closer (issue #58)",
+			desc = "identifier containing 'end_' not treated as a block closer",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1068,12 +581,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Genuine block openers named in the issue's acceptance criteria must
-			-- still count once the frontier is underscore-aware: each pairs a
-			-- keyword-adjacent `do`/`fn` with a bare `end` on its own line, so the
-			-- fallback's block-depth accounting must stay balanced through all of
-			-- them and still reach the trailing dep list.
-			desc = "genuine if/case/cond/with/receive/try/for/fn block openers still counted (issue #58)",
+			desc = "genuine if/case/cond/with/receive/try/for/fn block openers still counted",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1121,12 +629,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- The issue's own reproduction: a nested anonymous function passed to a
-			-- call closes as `end)`, which the old whole-line `^%s*end%s*$` close
-			-- test never recognized. The opener stayed on the books, so the dep
-			-- function's own closing `end` merely decremented a phantom depth
-			-- instead of ending the scan, and extraction leaked into `unrelated`.
-			desc = "nested 'fn ... end)' inside the dep function body balances (issue #63)",
+			desc = "nested 'fn ... end)' inside the dep function body balances",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1145,10 +648,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- A closer followed by a delimiter other than `)`: an `if ... do` block
-			-- as a list element, closed by `end,` ahead of the next element. The old
-			-- whole-line close test missed this exactly as it missed `end)`.
-			desc = "closer followed by a delimiter ('end,') balances (issue #63)",
+			desc = "closer followed by a delimiter ('end,') balances",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1170,11 +670,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Same-line opener/closer form, net-neutral: `fn x -> x end` opens and
-			-- closes on one line inside a call. The old scheme counted the opener
-			-- (anywhere-on-line) but never the closer (whole-line only), so the net
-			-- effect was a phantom +1 instead of the correct 0.
-			desc = "same-line 'fn x -> x end' inside a call is net-neutral (issue #63)",
+			desc = "same-line 'fn x -> x end' inside a call is net-neutral",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1191,10 +687,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Same-line opener/closer form inside a keyword list: `fn -> :ok end`
-			-- as a keyword value, followed by a sibling key on the same line. As
-			-- with the call form above, this must be net-neutral.
-			desc = "keyword list with inline 'fn -> ... end' is net-neutral (issue #63)",
+			desc = "keyword list with inline 'fn -> ... end' is net-neutral",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1212,9 +705,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Multiple closers on one line: two nested anonymous functions closing
-			-- back to back (`end) end)`). Both must be counted, not just one.
-			desc = "multiple closers on one line are all counted (issue #63)",
+			desc = "multiple closers on one line are all counted",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1231,10 +722,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- The heredoc body's own `do` incremented the fallback's block_depth,
-			-- so the dep function's own `end` canceled the phantom depth instead
-			-- of ending the scan, and `unrelated`'s tuple leaked through.
-			desc = "block keyword inside a heredoc body is inert (issue #64, repro A)",
+			desc = "block keyword inside a heredoc body is inert",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1252,10 +740,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Already fixed by #61's project/0 narrowing (the fragment never
-			-- reaches configured_dep_function's search window). Kept as a
-			-- regression pin, not evidence of new heredoc work.
-			desc = "'deps:' fragment inside a module-level heredoc ignored (issue #64, repro B)",
+			desc = "'deps:' fragment inside a module-level heredoc ignored",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1268,11 +753,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- A bare `end` inside a heredoc body used to be worse than repro A:
-			-- it drove block_depth negative, so the fallback's own close check
-			-- fired on the heredoc body line and the real dep list was never
-			-- reached at all (`[]`, not just `[real, wrong]`).
-			desc = "'end' inside a heredoc body is inert (issue #64, repro C)",
+			desc = "'end' inside a heredoc body is inert",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1290,7 +771,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "'#' inside a heredoc body is inert (issue #64)",
+			desc = "'#' inside a heredoc body is inert",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1308,7 +789,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "unmatched '\"' inside a heredoc body is inert (issue #64)",
+			desc = "unmatched '\"' inside a heredoc body is inert",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1326,11 +807,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Unlike A/C above, a stray `[` inside a heredoc body doesn't merely
-			-- shift block depth -- it opens a phantom bracket that the fallback's
-			-- assignment-RHS tracker never sees close, so the real dep list is
-			-- classified as nested inside it and dropped entirely (`[]`).
-			desc = "'[' inside a heredoc body is inert (issue #64)",
+			desc = "'[' inside a heredoc body is inert",
 			expect = { "real" },
 			lines = {
 				"defmodule A.MixProject do",
@@ -1348,11 +825,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- The case #61's narrowing does not defeat: the heredoc sits inside
-			-- project/0's own body, so the `deps: fake()` fragment is inside
-			-- configured_dep_function's search window regardless of scoping.
-			desc = "heredoc inside project/0's own body does not defeat dep-function scoping"
-				.. " (issue #64, repro G)",
+			desc = "heredoc inside project/0's own body does not defeat dep-function scoping",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1367,17 +840,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- Unlike repro G above, project/0 here declares no `deps:` key at
-			-- all, so Treesitter's AST chain never resolves a body and falls
-			-- through to `configured_dep_function`'s raw-line text guess over
-			-- project/0's own window -- the same window as G, but reached by a
-			-- different route. Before masking that fallback's `lines` too, the
-			-- heredoc's `deps: fake()` text hijacked the guess on the
-			-- Treesitter path only: treesitter returned `[]` while the (already
-			-- masked) fallback correctly defaulted to `deps/0` and returned
-			-- `[real]`.
-			desc = "heredoc inside project/0's body does not hijack the Treesitter text-guess "
-				.. "fallback when project/0 has no 'deps:' key (issue #64)",
+			desc = "heredoc inside project/0's body does not hijack the default deps/0",
 			expect = { "real" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1392,12 +855,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- The fallback's `new_head_matcher` decided `defp deps(),` was block
-			-- form as soon as it saw the closing paren, without checking the next
-			-- line for a wrapped `do:`. Scanning then never found a closing `end`
-			-- (there is none -- this is keyword form) and leaked into `unrelated`'s
-			-- own `do:` body.
-			desc = "wrapped 'do:' after a zero-arity head does not leak into the next function (issue #68)",
+			desc = "wrapped 'do:' after a zero-arity head does not leak into the next function",
 			expect = { "jason" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1412,9 +870,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- The issue's own reproduction: a charlist containing the text "do"
-			-- must not be counted as a block opener by the fallback scanner.
-			desc = "charlist contents do not affect block depth (issue #69)",
+			desc = "charlist contents do not affect block depth",
 			expect = { "jason" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1432,7 +888,7 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			desc = "inline sigil contents do not affect block depth (issue #69)",
+			desc = "inline sigil contents do not affect block depth",
 			expect = { "jason" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1450,13 +906,8 @@ describe("parser parity: treesitter vs fallback", function()
 			},
 		},
 		{
-			-- The installed tree-sitter-elixir grammar mis-scans a sigil whose
-			-- paired delimiter nests (`~s(a (b) do c)`): the resulting ERROR
-			-- swallows the entire next line as sigil content, so the tuple never
-			-- becomes a real AST node and the Treesitter path returns nothing for
-			-- it. `parse_buffer` must defer to the fallback parser whenever the
-			-- tree has any parse error, rather than silently dropping the dep.
-			desc = "nested paired sigil delimiter does not drop the sibling dep (issue #79)",
+			-- The grammar yields an ERROR node here, so parse_buffer defers to the line scanner.
+			desc = "nested paired sigil delimiter does not drop the sibling dep",
 			expect = { "jason" },
 			lines = {
 				"defmodule Demo.MixProject do",
@@ -1466,6 +917,129 @@ describe("parser parity: treesitter vs fallback", function()
 				"    x = ~s(a (b) do c)",
 				'    [{:jason, "~> 1.4"}]',
 				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "empty-parens zero-arity keyword-form head",
+			expect = { "jason" },
+			lines = {
+				"defmodule App.MixProject do",
+				'  defp deps(), do: [{:jason, "~> 1.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "inline deps list wrapped onto the line after 'deps:'",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [",
+				"      deps:",
+				'      [{:jason, "~> 1.4"}]',
+				"    ]",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "keyword-form body whose list spans lines",
+			expect = { "jason", "plug" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project, do: [deps: deps()]",
+				"  defp deps, do: [",
+				'    {:jason, "~> 1.4"},',
+				'    {:plug, "~> 1.15"}',
+				"  ]",
+				'  defp other, do: [{:wrong, "~> 1.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "wrapped keyword-form body whose list spans lines",
+			expect = { "jason", "plug" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps,",
+				"    do: [",
+				'      {:jason, "~> 1.4"},',
+				'      {:plug, "~> 1.15"}',
+				"    ]",
+				"end",
+			},
+		},
+		{
+			desc = "hex alias on a wrapped tuple line",
+			expect = { "my_plug", "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    [",
+				'      {:my_plug, "~> 1.0",',
+				"       hex: :plug},",
+				'      {:jason, "~> 1.4", no_hex: :x}',
+				"    ]",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "tuple whose name atom starts on the line after '{'",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    [",
+				"      {",
+				'        :jason, "~> 1.4"}',
+				"    ]",
+				"  end",
+				"end",
+			},
+		},
+		{
+			desc = "quoted atom name",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				'  defp deps, do: [{:"jason", "~> 1.4"}]',
+				"end",
+			},
+		},
+		{
+			desc = "name paired only with the string directly after it",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				'  defp deps, do: [{:a, :b, "x"}, {:jason, "~> 1.4", "extra"}]',
+				"end",
+			},
+		},
+		{
+			desc = "deps: key inside a Keyword.merge call",
+			expect = { "jason" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    Keyword.merge(base(), deps: project_deps())",
+				"  end",
+				"  defp base, do: [app: :demo]",
+				'  defp project_deps, do: [{:jason, "~> 1.4"}]',
+				"end",
+			},
+		},
+		{
+			desc = "key merely ending in 'deps' is not the deps: key",
+			expect = { "real" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [my_deps: other(), app: :demo]",
+				"  end",
+				'  defp other, do: [{:wrong, "~> 1.0"}]',
+				'  defp deps, do: [{:real, "~> 1.0"}]',
 				"end",
 			},
 		},
@@ -1498,16 +1072,10 @@ describe("parser parity: treesitter vs fallback", function()
 
 	for _, case in ipairs(CASES) do
 		it("agrees on " .. case.desc, function()
-			local b = vim.api.nvim_create_buf(false, true)
-			vim.api.nvim_buf_set_lines(b, 0, -1, false, case.lines)
-			vim.bo[b].filetype = "elixir"
-			local ts = shape(parser.parse_buffer(b))
-			local fallback = shape(parser.parse_lines(case.lines))
-			eq(ts, fallback, "treesitter vs fallback for: " .. case.desc)
-			if case.expect then
-				eq(case.expect, names(ts), "treesitter dep names for: " .. case.desc)
-				eq(case.expect, names(fallback), "fallback dep names for: " .. case.desc)
-			end
+			local ts = shape(parse_buffer(case.lines))
+			local scanned = shape(fallback.parse_lines(case.lines))
+			eq(ts, scanned, "treesitter vs fallback for: " .. case.desc)
+			eq(case.expect, names(ts), "dep names for: " .. case.desc)
 		end)
 	end
 end)
