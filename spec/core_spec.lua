@@ -1,146 +1,20 @@
-describe("core pure helpers", function()
-	local old_vim
-	local core
-
-	before_each(function()
-		old_vim = rawget(_G, "vim")
-		_G.vim = {
-			api = {
-				nvim_create_namespace = function()
-					return 1
-				end,
-			},
-		}
-		package.loaded["hex-outdated.render"] = nil
-		package.loaded["hex-outdated.core"] = nil
-		core = require("hex-outdated.core")
-	end)
-
-	after_each(function()
-		package.loaded["hex-outdated.render"] = nil
-		package.loaded["hex-outdated.core"] = nil
-		_G.vim = old_vim
-	end)
-
-	describe("_render_items_for_deps", function()
-		it("filters unknown deps and maps render fields", function()
-			local items = core._render_items_for_deps({
-				{
-					kind = "hex",
-					row = 1,
-					col_start = 12,
-					col_end = 18,
-					name = "phoenix",
-				},
-				{
-					kind = "hex",
-					status = "unknown",
-					row = 2,
-					name = "ecto",
-				},
-				{
-					kind = "path",
-					row = 3,
-					name = "local_dep",
-				},
-				{
-					kind = "hex",
-					status = "upgradable",
-					row = 4,
-					col_start = 10,
-					col_end = 16,
-					name = "jason",
-					latest = "1.4.4",
-					suggested = "~> 1.4",
-				},
-			})
-
-			assert.are.same({
-				{
-					row = 1,
-					col_start = 12,
-					col_end = 18,
-					name = "phoenix",
-					status = "loading",
-					lock_behind = false,
-					lock_out_of_range = false,
-				},
-				{
-					row = 4,
-					col_start = 10,
-					col_end = 16,
-					name = "jason",
-					status = "upgradable",
-					latest = "1.4.4",
-					suggested = "~> 1.4",
-					lock_behind = false,
-					lock_out_of_range = false,
-				},
-			}, items)
-		end)
-	end)
-
-	describe("_package_result_patch", function()
-		it("maps fetch errors to terminal statuses", function()
-			assert.are.same(
-				{ status = "invalid" },
-				core._package_result_patch({ requirement = "~> 1.6" }, {
-					error = "package not found",
-					not_found = true,
-				})
-			)
-			assert.are.same(
-				{ status = "error" },
-				core._package_result_patch({ requirement = "~> 1.6" }, { error = "http 500" })
-			)
-		end)
-
-		it("classifies stale results that still carry the versions", function()
-			local patch = core._package_result_patch({ requirement = "~> 1.6" }, {
-				error = "http 503",
-				stale = true,
-				versions = { "1.6.0", "1.7.14" },
-			})
-
-			assert.are.equal("upgradable", patch.status)
-			assert.are.equal("1.7.14", patch.latest)
-		end)
-
-		it("classifies successful package results", function()
-			local patch = core._package_result_patch({ requirement = "~> 1.6" }, {
-				versions = { "1.6.0", "1.6.16", "1.7.14" },
-			})
-
-			assert.are.equal("upgradable", patch.status)
-			assert.are.equal("1.7.14", patch.latest)
-			assert.are.equal("~> 1.7", patch.suggested)
-			assert.are.equal("~>", patch.op)
-		end)
-	end)
-end)
-
-describe("core.refresh_render coalescing", function()
+describe("core", function()
 	local old_vim
 	local core
 	local scheduled
-	local render_calls
+	local rendered
 
 	before_each(function()
 		old_vim = rawget(_G, "vim")
 		scheduled = {}
-		render_calls = 0
+		rendered = {}
 		package.loaded["hex-outdated.render"] = {
-			render = function()
-				render_calls = render_calls + 1
+			render = function(_, items)
+				rendered[#rendered + 1] = items
 			end,
-			clear = function() end,
-			setup_highlights = function() end,
 		}
 		_G.vim = {
 			api = {
-				nvim_create_namespace = function()
-					return 1
-				end,
 				nvim_buf_is_valid = function()
 					return true
 				end,
@@ -159,105 +33,137 @@ describe("core.refresh_render coalescing", function()
 		_G.vim = old_vim
 	end)
 
-	it("renders nothing inline and schedules a single tick for many calls", function()
-		core.state[1] = { enabled = true, deps = {} }
+	-- Render `deps` for buffer 1 and return the items handed to render.render.
+	local function render_deps(deps)
+		core.state[1] = { enabled = true, deps = deps }
 		core.refresh_render(1)
-		core.refresh_render(1)
-		core.refresh_render(1)
+		scheduled[#scheduled]()
+		return rendered[#rendered]
+	end
 
-		assert.are.equal(0, render_calls)
-		assert.are.equal(1, #scheduled)
+	describe("refresh_render items", function()
+		it("renders hex deps only, skipping unknown requirements", function()
+			local items = render_deps({
+				{ kind = "hex", row = 1, col_start = 12, col_end = 18, name = "phoenix" },
+				{ kind = "hex", status = "unknown", row = 2, name = "ecto" },
+				{ kind = "path", row = 3, name = "local_dep" },
+				{
+					kind = "hex",
+					status = "upgradable",
+					row = 4,
+					col_start = 10,
+					col_end = 16,
+					name = "jason",
+					latest = "1.4.4",
+				},
+			})
 
-		scheduled[1]()
-		assert.are.equal(1, render_calls)
+			assert.are.equal(2, #items)
+			assert.are.equal("phoenix", items[1].name)
+			assert.are.equal("loading", items[1].status)
+			assert.are.equal(12, items[1].col_start)
+			assert.are.equal(18, items[1].col_end)
+			assert.are.equal("jason", items[2].name)
+			assert.are.equal("upgradable", items[2].status)
+			assert.are.equal("1.4.4", items[2].latest)
+		end)
+
+		it("carries lock fields and flags a lock behind latest", function()
+			local items = render_deps({
+				{
+					kind = "hex",
+					name = "jason",
+					requirement = "~> 1.0",
+					status = "upgradable",
+					latest = "1.4.5",
+					locked = "1.2.0",
+					lock_out_of_range = false,
+					row = 3,
+				},
+			})
+			assert.are.equal("1.2.0", items[1].locked)
+			assert.are.equal("~> 1.0", items[1].requirement)
+			assert.is_true(items[1].lock_behind)
+			assert.is_falsy(items[1].lock_out_of_range)
+		end)
+
+		it("does not flag lock_behind while latest is unknown", function()
+			local items = render_deps({
+				{ kind = "hex", name = "x", status = "loading", locked = "1.1.0", row = 0 },
+			})
+			assert.are.equal("1.1.0", items[1].locked)
+			assert.is_falsy(items[1].lock_behind)
+		end)
 	end)
 
-	it("schedules a fresh render once the previous tick has flushed", function()
-		core.state[1] = { enabled = true, deps = {} }
-		core.refresh_render(1)
-		scheduled[1]()
-		core.refresh_render(1)
+	describe("apply_package_result", function()
+		it("maps a 404 to invalid and other failures to error, clearing old data", function()
+			local dep = { requirement = "~> 1.6", status = "loading", latest = "1.0.0" }
+			core.apply_package_result(dep, { error = "package not found", not_found = true })
+			assert.are.equal("invalid", dep.status)
+			assert.is_nil(dep.latest)
 
-		assert.are.equal(2, #scheduled)
-		scheduled[2]()
-		assert.are.equal(2, render_calls)
+			core.apply_package_result(dep, { error = "http 500" })
+			assert.are.equal("error", dep.status)
+		end)
+
+		it("classifies stale results that still carry versions", function()
+			local dep = { requirement = "~> 1.6" }
+			core.apply_package_result(dep, { error = "http 503", versions = { "1.6.0", "1.7.14" } })
+			assert.are.equal("upgradable", dep.status)
+			assert.are.equal("1.7.14", dep.latest)
+		end)
+
+		it("classifies successful package results", function()
+			local dep = { requirement = "~> 1.6" }
+			core.apply_package_result(dep, { versions = { "1.6.0", "1.6.16", "1.7.14" } })
+			assert.are.equal("upgradable", dep.status)
+			assert.are.equal("1.7.14", dep.latest)
+			assert.are.equal("~> 1.7", dep.suggested)
+			assert.are.equal("~>", dep.op)
+		end)
 	end)
 
-	it("skips the render if the buffer was disabled before the tick ran", function()
-		core.state[1] = { enabled = true, deps = {} }
-		core.refresh_render(1)
-		core.state[1].enabled = false
+	describe("refresh_render coalescing", function()
+		it("renders nothing inline and schedules a single tick for many calls", function()
+			core.state[1] = { enabled = true, deps = {} }
+			core.refresh_render(1)
+			core.refresh_render(1)
+			core.refresh_render(1)
 
-		scheduled[1]()
-		assert.are.equal(0, render_calls)
-	end)
+			assert.are.equal(0, #rendered)
+			assert.are.equal(1, #scheduled)
 
-	it("does nothing for an unknown or disabled buffer", function()
-		core.refresh_render(99)
-		core.state[2] = { enabled = false, deps = {} }
-		core.refresh_render(2)
+			scheduled[1]()
+			assert.are.equal(1, #rendered)
+		end)
 
-		assert.are.equal(0, #scheduled)
-	end)
-end)
+		it("schedules a fresh render once the previous tick has flushed", function()
+			core.state[1] = { enabled = true, deps = {} }
+			core.refresh_render(1)
+			scheduled[1]()
+			core.refresh_render(1)
 
-describe("core._render_items_for_deps lock fields", function()
-	local old_vim
-	local core
+			assert.are.equal(2, #scheduled)
+			scheduled[2]()
+			assert.are.equal(2, #rendered)
+		end)
 
-	before_each(function()
-		old_vim = rawget(_G, "vim")
-		_G.vim = {
-			api = {
-				nvim_create_namespace = function()
-					return 1
-				end,
-			},
-		}
-		package.loaded["hex-outdated.render"] = nil
-		package.loaded["hex-outdated.core"] = nil
-		core = require("hex-outdated.core")
-	end)
+		it("skips the render if the buffer was disabled before the tick ran", function()
+			core.state[1] = { enabled = true, deps = {} }
+			core.refresh_render(1)
+			core.state[1].enabled = false
 
-	after_each(function()
-		package.loaded["hex-outdated.render"] = nil
-		package.loaded["hex-outdated.core"] = nil
-		_G.vim = old_vim
-	end)
+			scheduled[1]()
+			assert.are.equal(0, #rendered)
+		end)
 
-	it("carries locked/latest/requirement and computes lock_behind", function()
-		local items = core._render_items_for_deps({
-			{
-				kind = "hex",
-				name = "jason",
-				requirement = "~> 1.0",
-				status = "upgradable",
-				latest = "1.4.5",
-				locked = "1.2.0",
-				row = 3,
-				col_start = 9,
-				col_end = 15,
-			},
-		})
-		assert.are.equal(1, #items)
-		assert.are.equal("1.2.0", items[1].locked)
-		assert.is_true(items[1].lock_behind)
-		assert.are.equal("~> 1.0", items[1].requirement)
-	end)
+		it("does nothing for an unknown or disabled buffer", function()
+			core.refresh_render(99)
+			core.state[2] = { enabled = false, deps = {} }
+			core.refresh_render(2)
 
-	it("is false for lock_behind when latest is unknown", function()
-		local items = core._render_items_for_deps({
-			{
-				kind = "hex",
-				name = "x",
-				requirement = "~> 1.0",
-				status = "loading",
-				locked = "1.1.0",
-				row = 0,
-			},
-		})
-		assert.are.equal(1, #items)
-		assert.are.equal("1.1.0", items[1].locked)
-		assert.is_false(items[1].lock_behind)
+			assert.are.equal(0, #scheduled)
+		end)
 	end)
 end)

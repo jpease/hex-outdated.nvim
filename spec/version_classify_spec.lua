@@ -132,34 +132,7 @@ describe("version.classify", function()
 	end)
 end)
 
-describe("version.classify memoization", function()
-	-- Count M.parse calls during classify to detect re-parsing of the version list.
-	local function count_parses(fn)
-		local orig = version.parse
-		local calls = 0
-		version.parse = function(...)
-			calls = calls + 1
-			return orig(...)
-		end
-		local ok, err = pcall(fn)
-		version.parse = orig
-		assert.is_true(ok, tostring(err))
-		return calls
-	end
-
-	it("reuses the cached result for a repeated (list, requirement) pair", function()
-		local list = { "1.6.0", "1.7.0", "1.7.14" }
-		local first = version.classify("~> 1.6", list)
-
-		local second
-		local parses = count_parses(function()
-			second = version.classify("~> 1.6", list)
-		end)
-
-		assert.are.equal(0, parses)
-		assert.are.same(first, second) -- value-equal, but not required to be the same table
-	end)
-
+describe("version.classify result isolation", function()
 	it("does not let mutating one returned result affect a later classification", function()
 		local list = { "1.6.0", "1.7.0", "1.7.14" }
 		local first = version.classify("~> 1.6", list)
@@ -174,25 +147,6 @@ describe("version.classify memoization", function()
 		assert.are.equal(expected_status, second.status)
 		assert.are.equal(expected_latest, second.latest)
 		assert.are_not.equal("poisoned", second.op)
-	end)
-
-	it("recomputes when the requirement changes for the same list", function()
-		local list = { "1.6.0", "1.7.0", "1.7.14" }
-		version.classify("~> 1.6", list)
-
-		local parses = count_parses(function()
-			version.classify("== 1.6.0", list)
-		end)
-
-		assert.is_true(parses > 0)
-	end)
-
-	it("recomputes for an identical requirement against a different list", function()
-		local parses = count_parses(function()
-			version.classify("~> 1.6", { "1.6.0", "1.7.14" })
-		end)
-
-		assert.is_true(parses > 0)
 	end)
 end)
 

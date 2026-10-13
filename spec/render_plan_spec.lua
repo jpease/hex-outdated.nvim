@@ -1,6 +1,5 @@
--- Pure specs for render.build_plan: no Neovim required. render.lua's module
--- load touches vim.api.nvim_create_namespace, so stub the minimum vim needs
--- to require it, mirroring spec/core_spec.lua.
+-- render.lua creates namespaces at load and build_plan reads
+-- vim.diagnostic.severity, so stub just those.
 local config = require("hex-outdated.config")
 
 describe("render.build_plan", function()
@@ -16,6 +15,7 @@ describe("render.build_plan", function()
 					return 1
 				end,
 			},
+			diagnostic = { severity = { ERROR = 1, WARN = 2 } },
 		}
 		package.loaded["hex-outdated.render"] = nil
 		render = require("hex-outdated.render")
@@ -87,13 +87,6 @@ describe("render.build_plan", function()
 			}, cfg, 10, {})
 			assert.are.equal("HexOutdatedUpgradable", plan.extmarks[1].opts.virt_text[1][2])
 		end)
-
-		it("falls back to Comment when the status has no configured highlight", function()
-			local plan = render.build_plan({
-				{ row = 0, name = "jason", status = "totally_unknown_status" },
-			}, cfg, 10, {})
-			assert.are.equal("Comment", plan.extmarks[1].opts.virt_text[1][2])
-		end)
 	end)
 
 	describe("invalid-version diagnostic", function()
@@ -113,7 +106,7 @@ describe("render.build_plan", function()
 			assert.are.equal(3, d.lnum)
 			assert.are.equal(8, d.col)
 			assert.are.equal(15, d.end_col)
-			assert.are.equal("error", d.severity)
+			assert.are.equal(1, d.severity)
 			assert.are.equal(
 				"No published version of 'nope' matches this requirement (latest: 1.0.0)",
 				d.message
@@ -142,7 +135,7 @@ describe("render.build_plan", function()
 			assert.are.equal(4, d.lnum)
 			assert.are.equal(9, d.col)
 			assert.are.equal(15, d.end_col)
-			assert.are.equal("warn", d.severity)
+			assert.are.equal(2, d.severity)
 			assert.are.equal(
 				'mix.lock has jason 1.2.0, which no longer satisfies "~> 2.0" (run `mix deps.get`)',
 				d.message

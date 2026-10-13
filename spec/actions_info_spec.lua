@@ -1,48 +1,54 @@
+-- actions loads render (via core), which creates namespaces at load.
+local old_vim = rawget(_G, "vim")
+_G.vim = { api = { nvim_create_namespace = function() end } }
 local actions = require("hex-outdated.actions")
+_G.vim = old_vim
 
 describe("actions._info_lines", function()
-	it("shows requirement/locked/latest with a behind note", function()
-		local lines = actions._info_lines({
-			name = "jason",
-			requirement = "~> 1.0",
-			status = "upgradable",
-			latest = "1.4.5",
-			locked = "1.2.0",
-		})
-		assert.are.equal("jason", lines[1])
-		assert.is_truthy(lines[2]:find("~> 1.0", 1, true))
-		assert.is_truthy(lines[3]:find("locked", 1, true))
-		assert.is_truthy(lines[3]:find("1.2.0", 1, true))
-		assert.is_truthy(lines[3]:find("behind latest", 1, true))
-		assert.is_truthy(lines[4]:find("1.4.5", 1, true))
+	local function info(dep)
+		local lines = actions._info_lines(dep)
+		return { name = lines[1], requirement = lines[2], locked = lines[3], latest = lines[4] }
+	end
+
+	local base = { name = "jason", requirement = "~> 1.0", status = "upgradable", latest = "1.4.5" }
+	local function with(fields)
+		local dep = {}
+		for k, v in pairs(base) do
+			dep[k] = v
+		end
+		for k, v in pairs(fields) do
+			dep[k] = v
+		end
+		return dep
+	end
+
+	it("shows the name, requirement, locked and latest versions", function()
+		local lines = info(with({ locked = "1.2.0" }))
+		assert.are.equal("jason", lines.name)
+		assert.is_truthy(lines.requirement:find("~> 1.0", 1, true))
+		assert.is_truthy(lines.locked:find("1.2.0", 1, true))
+		assert.is_truthy(lines.latest:find("1.4.5", 1, true))
 	end)
 
-	it("notes when the locked version is not in mix.lock", function()
-		local lines =
-			actions._info_lines({ name = "x", requirement = "~> 1.0", status = "loading" })
-		assert.is_truthy(lines[3]:find("not in mix.lock", 1, true))
+	it("distinguishes behind, current, out-of-range and unknown-latest lock notes", function()
+		local notes = {
+			info(with({ locked = "1.2.0" })).locked,
+			info(with({ locked = "1.2.0", latest = "1.2.0" })).locked,
+			info(with({ locked = "1.2.0", requirement = "~> 2.0" })).locked,
+			info(with({ locked = "1.2.0", latest = false })).locked,
+			info(with({})).locked,
+		}
+		for i = 1, #notes do
+			for j = i + 1, #notes do
+				assert.are_not.equal(notes[i], notes[j])
+			end
+		end
 	end)
 
-	it("notes an out-of-range lock", function()
-		local lines = actions._info_lines({
-			name = "x",
-			requirement = "~> 2.0",
-			status = "upgradable",
-			latest = "2.1.0",
-			locked = "1.0.0",
-		})
-		assert.is_truthy(lines[3]:find("not satisfied by requirement", 1, true))
-	end)
-
-	it("shows a fetch-failed requirement note and unavailable latest for an error dep", function()
-		local lines = actions._info_lines({
-			name = "phoenix",
-			requirement = "~> 1.7",
-			status = "error",
-		})
-		assert.is_falsy(lines[2]:find("checking…", 1, true))
-		assert.is_truthy(lines[2]:find("fetch failed", 1, true))
-		assert.is_falsy(lines[4]:find("loading", 1, true))
-		assert.is_truthy(lines[4]:find("unavailable", 1, true))
+	it("distinguishes a failed fetch from one still loading", function()
+		local loading = info({ name = "phoenix", requirement = "~> 1.7", status = "loading" })
+		local failed = info({ name = "phoenix", requirement = "~> 1.7", status = "error" })
+		assert.are_not.equal(loading.requirement, failed.requirement)
+		assert.are_not.equal(loading.latest, failed.latest)
 	end)
 end)

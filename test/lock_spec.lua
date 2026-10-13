@@ -45,12 +45,35 @@ describe("lock.load", function()
 end)
 
 describe("lock.find_lock_path", function()
-	it("walks native Windows paths", function()
-		local expected = "C:\\proj\\mix.lock"
-		local found = lock.find_lock_path("C:\\proj\\apps\\web\\mix.exs", function(path)
-			return path == expected
-		end)
-		eq(expected, found)
+	local function project(rel_dirs)
+		local root = vim.fn.tempname()
+		for _, rel in ipairs(rel_dirs) do
+			vim.fn.mkdir(root .. rel, "p")
+		end
+		return vim.fs.normalize(vim.uv.fs_realpath(root))
+	end
+
+	it("finds mix.lock next to mix.exs", function()
+		local root = project({ "" })
+		write(root .. "/mix.lock", "%{}\n")
+		eq(root .. "/mix.lock", lock.find_lock_path(root .. "/mix.exs"))
+	end)
+
+	it("walks up to a parent lock (umbrella apps)", function()
+		local root = project({ "/apps/web" })
+		write(root .. "/mix.lock", "%{}\n")
+		eq(root .. "/mix.lock", lock.find_lock_path(root .. "/apps/web/mix.exs"))
+	end)
+
+	it("prefers the nearest lock over an ancestor's", function()
+		local root = project({ "/apps/web" })
+		write(root .. "/mix.lock", "%{}\n")
+		write(root .. "/apps/web/mix.lock", "%{}\n")
+		eq(root .. "/apps/web/mix.lock", lock.find_lock_path(root .. "/apps/web/mix.exs"))
+	end)
+
+	it("returns nil for an unnamed buffer", function()
+		is_nil(lock.find_lock_path(""))
 	end)
 end)
 

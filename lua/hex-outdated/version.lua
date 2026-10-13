@@ -1,16 +1,9 @@
 local M = {}
 
--- Elixir rejects a numeric identifier (core component or all-digit prerelease
--- identifier) above 14 decimal digits; see Version.parse/1 in the Elixir
--- standard library. `#n <= MAX_NUMERIC_DIGITS` is checked as a digit count,
--- not a magnitude comparison, because tonumber() on a 15+ digit string goes
--- through a double and loses exactness. Given leading zeros are rejected
--- separately, digit count and magnitude coincide exactly: any string of
--- MAX_NUMERIC_DIGITS digits or fewer is < 10^14, and any longer string
--- without a leading zero is >= 10^14.
+-- Elixir rejects numeric identifiers longer than 14 digits; counted as digits, not magnitude.
 local MAX_NUMERIC_DIGITS = 14
 
---- Parse a version string into { major, minor, patch, pre, precision, raw } or nil.
+--- Parse a version string into { major, minor, patch, pre, precision } or nil.
 function M.parse(str)
 	if type(str) ~= "string" then
 		return nil
@@ -80,7 +73,6 @@ function M.parse(str)
 		patch = parts[3] or 0,
 		pre = pre,
 		precision = #parts,
-		raw = str,
 	}
 end
 
@@ -156,8 +148,8 @@ end
 
 local OPS = { "~>", ">=", "<=", "==", "!=", ">", "<" }
 
---- Parse a single-clause Elixir requirement into { op, version, raw } or nil.
---- Combined clauses (" and "/" or ") are unsupported in v1 and return nil.
+--- Parse a single-clause Elixir requirement into { op, version } or nil.
+--- Combined clauses (" and "/" or ") are unsupported and return nil.
 function M.parse_requirement(str)
 	if type(str) ~= "string" then
 		return nil
@@ -181,13 +173,13 @@ function M.parse_requirement(str)
 			elseif ver.precision < 3 then
 				return nil
 			end
-			return { op = op, version = ver, raw = str }
+			return { op = op, version = ver }
 		end
 	end
 	-- Bare version string treated as ==; requires full precision.
 	local ver = M.parse(s)
 	if ver and ver.precision == 3 then
-		return { op = "==", version = ver, raw = str }
+		return { op = "==", version = ver }
 	end
 	return nil
 end
@@ -366,6 +358,27 @@ function M.classify(req_str, published)
 		by_req[req_str] = cached
 	end
 	return shallow_copy(cached)
+end
+
+--- True when locked < latest. False if either version is unparseable.
+function M.is_behind(locked_str, latest_str)
+	local l = M.parse(locked_str)
+	local r = M.parse(latest_str)
+	if not l or not r then
+		return false
+	end
+	return M.compare(l, r) < 0
+end
+
+--- True when `locked_str` does not satisfy a parseable single-clause requirement.
+--- False when either side is unparseable.
+function M.out_of_range(requirement_str, locked_str)
+	local req = M.parse_requirement(requirement_str)
+	local locked = M.parse(locked_str)
+	if not req or not locked then
+		return false
+	end
+	return not M.satisfies(req, locked)
 end
 
 return M

@@ -2,15 +2,11 @@ local config = require("hex-outdated.config")
 local core = require("hex-outdated.core")
 local actions = require("hex-outdated.actions")
 local render = require("hex-outdated.render")
-local hex_api = require("hex-outdated.hex_api")
 
 local M = {}
 
--- Ordered, documented `:HexOutdated` subcommands. This array is the single
--- source of truth: COMMANDS below (built once all M.<action> handlers exist)
--- derives both the completion candidates and the dispatch table from it, so
--- the two cannot drift apart. Any other function on M (e.g. M.setup) stays a
--- legitimate exported Lua API but is never reachable as a subcommand (#78).
+-- `:HexOutdated` subcommands, in completion order. Only these are dispatchable
+-- or bindable via `keymaps`; other functions on M (e.g. setup) are Lua API only.
 local SUBCOMMANDS = { "refresh", "toggle", "upgrade", "versions", "open", "info", "lock" }
 
 local function is_mixexs(bufnr)
@@ -45,25 +41,18 @@ function M.upgrade()
 end
 
 function M.open()
-	local bufnr, deps = current_deps()
-	actions.open(bufnr, actions.dep_at_cursor(deps))
+	local _, deps = current_deps()
+	actions.open(actions.dep_at_cursor(deps))
 end
 
 function M.versions()
 	local bufnr, deps = current_deps()
-	actions.versions(bufnr, actions.dep_at_cursor(deps), function(name, cb)
-		hex_api.get_package(name, core.api_opts(), cb)
-	end)
+	actions.versions(bufnr, actions.dep_at_cursor(deps))
 end
 
 function M.info(dep)
 	local bufnr, deps = current_deps()
-	if not dep then
-		dep = actions.dep_at_cursor(deps)
-	end
-	actions.info(bufnr, dep, function(name, cb)
-		hex_api.get_package(name, core.api_opts(), cb)
-	end)
+	actions.info(bufnr, dep or actions.dep_at_cursor(deps))
 end
 
 function M.lock()
@@ -80,11 +69,7 @@ function M.lock()
 	core.refresh_render(bufnr)
 end
 
--- Subcommand-to-handler lookup, built from SUBCOMMANDS once every M.<action>
--- above is defined. This is the same table the :HexOutdated command below
--- uses for both completion (its keys, in SUBCOMMANDS order) and dispatch
--- (looking up the handler to call) — one explicit table, not two lists that
--- could drift apart.
+-- Subcommand name -> handler; drives :HexOutdated dispatch and `keymaps`.
 local COMMANDS = {}
 for _, name in ipairs(SUBCOMMANDS) do
 	COMMANDS[name] = M[name]
@@ -117,21 +102,15 @@ local function clear_buf_keymaps(bufnr)
 	buf_keymaps[bufnr] = nil
 end
 
--- Plugin-owned per-buffer auto-update debounce timer, tracked across attach()
--- calls the same way buf_keymaps is: clearing the per-buffer augroup only
--- stops FUTURE TextChanged triggers, it does not cancel a vim.defer_fn timer
--- already in flight from a previous attach()'s closure.
+-- Per-buffer auto-update debounce timer. Clearing the augroup on reattach does
+-- not cancel a vim.defer_fn timer already in flight, so it is tracked here.
 local buf_timers = {}
 
 local function stop_buf_timer(bufnr)
 	local timer = buf_timers[bufnr]
 	if timer then
 		buf_timers[bufnr] = nil
-		-- vim.defer_fn closes its own timer handle just before invoking the
-		-- deferred callback (see $VIMRUNTIME/lua/vim/_core/editor.lua), so a
-		-- timer that already fired naturally is closing (or closed) by the
-		-- time anything else can observe it here; guard against closing it
-		-- again, which libuv raises an error for.
+		-- vim.defer_fn closes its handle before firing; closing twice errors.
 		if not timer:is_closing() then
 			timer:stop()
 			timer:close()
@@ -166,14 +145,10 @@ local function attach(bufnr)
 			stop_buf_timer(bufnr)
 		end,
 	})
-	for action, lhs in pairs(config.options.keymaps or {}) do
-		if lhs and type(M[action]) == "function" then
-			vim.keymap.set(
-				"n",
-				lhs,
-				M[action],
-				{ buffer = bufnr, desc = "hex-outdated: " .. action }
-			)
+	for action, lhs in pairs(config.options.keymaps) do
+		local fn = COMMANDS[action]
+		if fn then
+			vim.keymap.set("n", lhs, fn, { buffer = bufnr, desc = "hex-outdated: " .. action })
 			installed[#installed + 1] = lhs
 		end
 	end
@@ -198,9 +173,8 @@ local function attach(bufnr)
 	local hover = config.options.popup.hover_key
 	if hover then
 		vim.keymap.set("n", hover, function()
-			local b = vim.api.nvim_get_current_buf()
-			local st = core.state[b]
-			local dep = actions.dep_at_cursor(st and st.deps or {})
+			local b, deps = current_deps()
+			local dep = actions.dep_at_cursor(deps)
 			if dep then
 				M.info(dep)
 			elseif #vim.lsp.get_clients({ bufnr = b }) > 0 then

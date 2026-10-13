@@ -1,12 +1,8 @@
 local config = require("hex-outdated.config")
-local lock = require("hex-outdated.lock")
+local core = require("hex-outdated.core")
 local version = require("hex-outdated.version")
 
 local M = {}
-
-local function package_name(dep)
-	return dep.package or dep.name
-end
 
 local function context_is_current(win, bufnr, cursor)
 	if
@@ -15,7 +11,6 @@ local function context_is_current(win, bufnr, cursor)
 			and vim.api.nvim_buf_is_valid(bufnr)
 			and vim.api.nvim_get_current_win() == win
 			and vim.api.nvim_get_current_buf() == bufnr
-			and vim.api.nvim_win_get_buf(win) == bufnr
 		)
 	then
 		return false
@@ -24,15 +19,8 @@ local function context_is_current(win, bufnr, cursor)
 	return not cursor or (current[1] == cursor[1] and current[2] == cursor[2])
 end
 
--- True when `dep` was analyzed against the buffer's current changedtick. A dep
--- with no changedtick (e.g. hand-built in a test) is treated as always fresh,
--- provided the buffer itself is still valid. Shared by every action that would
--- otherwise act on a stale dependency snapshot: the edit-producing paths
--- (replace_requirement, for upgrade and version selection) and the read-only
--- paths (open, info, versions), plus info's own post-fetch and pre-display
--- rechecks. Pass `silent` for a background recheck (e.g. after an async fetch
--- resolves) where a user-facing warning would be surprising or duplicated;
--- the pre-action guards keep the default, user-facing notification.
+--- True when `bufnr` is valid and `dep` was analyzed at its current changedtick
+--- (a dep without a changedtick counts as fresh). Warns unless `silent`.
 local function is_fresh(bufnr, dep, silent)
 	if not vim.api.nvim_buf_is_valid(bufnr) then
 		return false
@@ -50,9 +38,6 @@ local function is_fresh(bufnr, dep, silent)
 end
 
 local function replace_requirement(bufnr, dep, replacement)
-	if not vim.api.nvim_buf_is_valid(bufnr) then
-		return false
-	end
 	if not is_fresh(bufnr, dep) then
 		return false
 	end
@@ -69,9 +54,8 @@ local function replace_requirement(bufnr, dep, replacement)
 	return true
 end
 
--- The operator to preserve when inserting a version: prefer the classified
--- `dep.op`, but fall back to parsing the raw requirement so the popup works
--- even on deps that were never classified (e.g. a fetch failed).
+-- The operator to preserve when inserting a version: the classified `dep.op`,
+-- else parsed from the requirement (deps whose fetch failed are unclassified).
 local function dep_op(dep)
 	if dep.op then
 		return dep.op
@@ -101,9 +85,9 @@ function M._info_lines(dep)
 	lines[#lines + 1] = string.format("requirement  %s   %s", dep.requirement or "?", req_note)
 	if dep.locked then
 		local note
-		if dep.requirement and lock.out_of_range(dep.requirement, dep.locked) then
+		if dep.requirement and version.out_of_range(dep.requirement, dep.locked) then
 			note = "not satisfied by requirement"
-		elseif dep.latest and lock.behind(dep.locked, dep.latest) then
+		elseif dep.latest and version.is_behind(dep.locked, dep.latest) then
 			note = "behind latest"
 		elseif dep.latest then
 			note = "up to date"
@@ -186,15 +170,12 @@ function M.upgrade(bufnr, dep)
 end
 
 --- Open the package's hex.pm page in a browser.
-function M.open(bufnr, dep)
+function M.open(dep)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
 	end
-	if not is_fresh(bufnr, dep) then
-		return
-	end
-	vim.ui.open("https://hex.pm/packages/" .. package_name(dep))
+	vim.ui.open("https://hex.pm/packages/" .. (dep.package or dep.name))
 end
 
 -- Build a requirement string for an inserted version, preserving the operator style.
@@ -203,7 +184,7 @@ end
 local function format_operator(dep, op, operand)
 	local raw = dep.requirement or ""
 	local leading, _, spacing = raw:match("^(%s*)([~><=!]+)(%s*)")
-	local trailing = raw:match("(%s*)$") or ""
+	local trailing = raw:match("(%s*)$")
 	if not leading then
 		leading, spacing = "", " "
 	end
@@ -219,18 +200,18 @@ local function requirement_for(dep, version_str)
 		local req = dep.requirement and version.parse_requirement(dep.requirement)
 		if req and req.version.precision >= 3 then
 			local major, minor, patch = version_str:match("^(%d+)%.(%d+)%.(%d+)")
-			if major and minor and patch then
+			if major then
 				return format_operator(dep, op, string.format("%s.%s.%s", major, minor, patch))
 			end
 		end
 		local major, minor = version_str:match("^(%d+)%.(%d+)")
-		if major and minor then
+		if major then
 			return format_operator(dep, op, string.format("%s.%s", major, minor))
 		end
 	end
 	if op == "==" and dep.requirement and dep.requirement:match("^%s*%d") then
-		local leading = dep.requirement:match("^(%s*)") or ""
-		local trailing = dep.requirement:match("(%s*)$") or ""
+		local leading = dep.requirement:match("^(%s*)")
+		local trailing = dep.requirement:match("(%s*)$")
 		return leading .. version_str .. trailing
 	end
 	if op then
@@ -239,12 +220,10 @@ local function requirement_for(dep, version_str)
 	return "== " .. version_str
 end
 
--- Open a small scratch float at the cursor showing `lines`. Shared scaffold for
--- the versions picker and the info popup. The buffer is non-modifiable and wiped
--- when its window hides so it does not linger; the filetype lets colorschemes and
--- statuslines target it. Width fits the content (>= opts.min_width); height fits
--- the line count, capped at opts.max_height when given. Returns win, buf — or nil
--- when buffer creation fails. opts: { filetype, enter, min_width, max_height? }.
+-- Open a non-modifiable scratch float at the cursor showing `lines`, wiped when
+-- hidden. Width fits the content (>= opts.min_width); height fits the line
+-- count, capped at opts.max_height when given. Returns win, buf — or nil when
+-- buffer creation fails. opts: { filetype, enter, min_width, max_height? }.
 local function open_cursor_float(lines, opts)
 	local buf = vim.api.nvim_create_buf(false, true)
 	if buf == 0 then
@@ -259,7 +238,7 @@ local function open_cursor_float(lines, opts)
 		width = math.max(width, #l + 2)
 	end
 	local height = opts.max_height and math.min(#lines, opts.max_height) or #lines
-	local win = vim.api.nvim_open_win(buf, opts.enter or false, {
+	local win = vim.api.nvim_open_win(buf, opts.enter, {
 		relative = "cursor",
 		row = 1,
 		col = 0,
@@ -271,15 +250,13 @@ local function open_cursor_float(lines, opts)
 	return win, buf
 end
 
--- Non-selectable first line shown when the list comes from a transient error's
--- retained last-known-good versions (see hex_api.deliver). It deliberately
--- cannot parse as a version so it never collides with a real release string.
+-- Non-selectable first line shown when the list is a transient error's retained
+-- versions; it never parses as a version.
 local STALE_HEADER = "-- cached (offline) --"
 
 --- Open a floating window listing published versions for the dep; selecting one
 --- (Enter) inserts it into the requirement; `q`/<Esc> closes.
---- The caller injects `fetch(name, cb)` (it wraps hex_api.get_package).
-function M.versions(bufnr, dep, fetch)
+function M.versions(bufnr, dep)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
@@ -289,12 +266,10 @@ function M.versions(bufnr, dep, fetch)
 	end
 	local origin_win = vim.api.nvim_get_current_win()
 	local origin_cursor = vim.api.nvim_win_get_cursor(origin_win)
-	fetch(package_name(dep), function(res)
+	core.fetch_package(dep, function(res)
 		local versions = res.versions
-		-- Match core's contract: a transient error still carrying usable versions
-		-- (hex_api.deliver's stale carry-over) is browsable, not terminal. Only a
-		-- result with nothing usable — a hard error, a 404 (deliver never attaches
-		-- stale data to those), or all-retired — bails out here.
+		-- A transient error that still carries versions is browsable; anything
+		-- else without versions (hard error, 404, all retired) is not.
 		if not (versions and #versions > 0) then
 			local msg = res.error
 				or (res.all_retired and "no active versions found (all releases are retired)")
@@ -306,15 +281,11 @@ function M.versions(bufnr, dep, fetch)
 			if not context_is_current(origin_win, bufnr, origin_cursor) then
 				return
 			end
-			-- Re-check freshness immediately before display: an edit to the dep's
-			-- own line that leaves window/buffer/cursor identity unchanged is
-			-- invisible to context_is_current, but still invalidates `dep`.
+			-- An edit to the dep's own line keeps window/buffer/cursor identity.
 			if not is_fresh(bufnr, dep, true) then
 				return
 			end
-			-- An error alongside usable versions only happens via the stale
-			-- carry-over path, so res.error (not res.stale) is the source of truth
-			-- for whether to warn the user the list may be out of date.
+			-- An error alongside versions means they are the retained stale list.
 			local stale = res.error ~= nil
 			local lines = versions -- newest-first per hex.pm ordering
 			if stale then
@@ -325,18 +296,16 @@ function M.versions(bufnr, dep, fetch)
 			end
 			local win, buf = open_cursor_float(lines, {
 				filetype = "hex-outdated-versions",
-				enter = true, -- focus the picker so the user can move + select
+				enter = true,
 				min_width = 20,
 				max_height = config.options.popup.max_height,
 			})
 			if not win then
 				return
 			end
-			-- Highlight the active row so the selection target is obvious.
 			vim.wo[win].cursorline = true
 			local first_version_row = stale and 2 or 1
 			if stale then
-				-- Keep the common path (selecting a version) unaffected by the header.
 				vim.api.nvim_win_set_cursor(win, { first_version_row, 0 })
 			end
 			local function close()
@@ -348,22 +317,19 @@ function M.versions(bufnr, dep, fetch)
 			vim.keymap.set("n", "<esc>", close, { buffer = buf, nowait = true })
 			vim.keymap.set("n", "<cr>", function()
 				if stale and vim.api.nvim_win_get_cursor(win)[1] < first_version_row then
-					return -- header row: not a version, no-op
+					return
 				end
 				local selected = vim.api.nvim_get_current_line()
 				close()
-				if vim.api.nvim_buf_is_valid(bufnr) then
-					replace_requirement(bufnr, dep, requirement_for(dep, selected))
-				end
+				replace_requirement(bufnr, dep, requirement_for(dep, selected))
 			end, { buffer = buf, nowait = true })
 		end)
 	end)
 end
 
---- Open a read-only detail float for `dep` (requirement / locked / latest).
---- The caller injects `fetch(name, cb)` to resolve `latest` when it is not yet
---- known.
-function M.info(bufnr, dep, fetch)
+--- Open a read-only detail float for `dep` (requirement / locked / latest),
+--- fetching and classifying the package first when `latest` is not yet known.
+function M.info(bufnr, dep)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
 		return
@@ -371,33 +337,28 @@ function M.info(bufnr, dep, fetch)
 	if not is_fresh(bufnr, dep) then
 		return
 	end
-	local origin = bufnr
 	local origin_win = vim.api.nvim_get_current_win()
 	local origin_cursor = vim.api.nvim_win_get_cursor(origin_win)
 
 	local function open()
 		vim.schedule(function()
-			if not context_is_current(origin_win, origin, origin_cursor) then
+			if not context_is_current(origin_win, bufnr, origin_cursor) then
 				return
 			end
-			-- Re-check freshness immediately before display: an edit to the dep's
-			-- own line that leaves window/buffer/cursor identity unchanged is
-			-- invisible to context_is_current, but still invalidates `dep`.
-			if not is_fresh(origin, dep, true) then
+			-- An edit to the dep's own line keeps window/buffer/cursor identity.
+			if not is_fresh(bufnr, dep, true) then
 				return
 			end
-			local lines = M._info_lines(dep)
-			local win = open_cursor_float(lines, {
+			local win = open_cursor_float(M._info_lines(dep), {
 				filetype = "hex-outdated-info",
-				enter = false, -- read-only hover: keep focus in the source buffer
+				enter = false,
 				min_width = 24,
 			})
 			if not win then
 				return
 			end
-			-- Hover-style: close as soon as the user moves or leaves.
 			vim.api.nvim_create_autocmd({ "CursorMoved", "BufLeave", "InsertEnter" }, {
-				buffer = origin,
+				buffer = bufnr,
 				once = true,
 				callback = function()
 					if vim.api.nvim_win_is_valid(win) then
@@ -411,26 +372,12 @@ function M.info(bufnr, dep, fetch)
 	if dep.latest or dep.status == "invalid" then
 		open()
 	else
-		fetch(package_name(dep), function(res)
-			-- Compute the classification as temporary presentation values first;
-			-- commit them onto the canonical dep only if it's still fresh (the
-			-- buffer may have been edited, or closed, while the fetch was in
-			-- flight). `open()` re-checks freshness again immediately before
-			-- display, independent of this commit.
-			local status, latest, suggested = dep.status, dep.latest, dep.suggested
-			if res and res.versions and #res.versions > 0 then
-				local c = version.classify(dep.requirement, res.versions)
-				status = c.status
-				latest = c.latest
-				suggested = suggested or c.suggested
-			elseif res and res.latest then
-				latest = res.latest
+		core.fetch_package(dep, function(res)
+			-- The buffer may have been edited or closed while the fetch was in flight.
+			if not is_fresh(bufnr, dep, true) then
+				return
 			end
-			if is_fresh(bufnr, dep, true) then
-				dep.status = status
-				dep.latest = latest
-				dep.suggested = suggested
-			end
+			core.apply_package_result(dep, res)
 			open()
 		end)
 	end

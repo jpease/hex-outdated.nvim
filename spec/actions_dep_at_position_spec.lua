@@ -1,4 +1,8 @@
+-- actions loads render (via core), which creates namespaces at load.
+local old_vim = rawget(_G, "vim")
+_G.vim = { api = { nvim_create_namespace = function() end } }
 local actions = require("hex-outdated.actions")
+_G.vim = old_vim
 
 describe("actions.dep_at_position", function()
 	it("selects each dependency by exact span on a compact line with multiple deps", function()

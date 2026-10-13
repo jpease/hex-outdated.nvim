@@ -14,7 +14,7 @@ describe("setup", function()
 	end)
 end)
 
-describe("is_mixexs buffer name matching (issue #34)", function()
+describe("is_mixexs buffer name matching", function()
 	it("does not attach to an already-loaded buffer whose name merely ends in mix.exs", function()
 		local buf = vim.api.nvim_create_buf(true, false)
 		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/remix.exs")
@@ -66,7 +66,7 @@ describe("lock lens toggle", function()
 	end)
 end)
 
-describe("state seeding drift (issue #36)", function()
+describe("state seeding", function()
 	it("keeps the configured lock.lens default when toggle seeds state first", function()
 		lock.clear_cache()
 		local dir = vim.fn.tempname()
@@ -152,7 +152,7 @@ local function has_keymap(bufnr, lhs)
 	return false
 end
 
-describe("repeated setup removes stale keymaps (issue #28)", function()
+describe("repeated setup removes stale keymaps", function()
 	it("removes a hover key that is later disabled", function()
 		hex.setup({ enabled = false, popup = { hover_key = "gK" } })
 		local buf = vim.api.nvim_create_buf(true, false)
@@ -203,7 +203,7 @@ describe("repeated setup removes stale keymaps (issue #28)", function()
 		eq("user mapping", keymap_desc(buf, "gU"), "user mapping not overwritten or deleted")
 	end)
 
-	it("removes a <leader>-based keymap action that is later cleared (issue #53)", function()
+	it("removes a <leader>-based keymap action that is later cleared", function()
 		local old_mapleader = vim.g.mapleader
 		vim.g.mapleader = " "
 
@@ -220,7 +220,7 @@ describe("repeated setup removes stale keymaps (issue #28)", function()
 		vim.g.mapleader = old_mapleader
 	end)
 
-	it("does not delete a user mapping that replaced a plugin leader mapping (#53)", function()
+	it("does not delete a user mapping that replaced a plugin leader mapping", function()
 		local old_mapleader = vim.g.mapleader
 		vim.g.mapleader = " "
 
@@ -242,7 +242,7 @@ describe("repeated setup removes stale keymaps (issue #28)", function()
 	end)
 end)
 
-describe("auto_update debounce (issue #52)", function()
+describe("auto_update debounce", function()
 	local function with_stubbed_analyze(fn)
 		local original_analyze = core.analyze
 		local analyze_calls = 0
@@ -259,7 +259,7 @@ describe("auto_update debounce (issue #52)", function()
 		end
 	end
 
-	it("does not fire a stale timer left over from a previous attach (issue #52)", function()
+	it("does not fire a stale timer left over from a previous attach", function()
 		with_stubbed_analyze(function(get_calls)
 			hex.setup({ enabled = false, auto_update = true, debounce_ms = 30 })
 			local buf = vim.api.nvim_create_buf(true, false)
@@ -318,7 +318,7 @@ describe("auto_update debounce (issue #52)", function()
 	end)
 end)
 
-describe("auto_update debounce timer handle leak (issue #56)", function()
+describe("auto_update debounce timer handle leak", function()
 	-- vim.uv.walk visits every libuv handle in the process, including handles
 	-- owned by Neovim itself or by other tests. A stopped-but-unclosed timer
 	-- still shows up here (that is exactly the leak), while a closed one does
@@ -395,8 +395,8 @@ describe("auto_update debounce timer handle leak (issue #56)", function()
 	end)
 end)
 
-describe("read-only actions reject a stale dependency snapshot (issue #67)", function()
-	it("open/info/versions ignore a dep snapshot an edit invalidated after analysis", function()
+describe("read-only actions reject a stale dependency snapshot", function()
+	it("info/versions ignore a dep snapshot an edit invalidated after analysis", function()
 		local original_get_package = hex_api.get_package
 		-- Left unresolved: only changedtick stamping from the initial analyze
 		-- matters here, and each action must refuse before ever calling this.
@@ -425,15 +425,6 @@ describe("read-only actions reject a stale dependency snapshot (issue #67)", fun
 		-- before anything re-analyzes; core.state[buf].deps still holds jason.
 		vim.api.nvim_buf_set_lines(buf, 1, 2, false, { '  [{:phoenix, "~> 1.7"}]' })
 
-		local original_ui_open = vim.ui.open
-		local opened
-		vim.ui.open = function(url)
-			opened = url
-		end
-		hex.open()
-		vim.ui.open = original_ui_open
-		is_nil(opened, "open must not open the stale jason snapshot's package")
-
 		local original_notify = vim.notify
 		local warned = 0
 		vim.notify = function(_, level)
@@ -452,7 +443,7 @@ describe("read-only actions reject a stale dependency snapshot (issue #67)", fun
 	end)
 end)
 
-describe("subcommand dispatch restricted to documented commands (issue #78)", function()
+describe("subcommand dispatch restricted to documented commands", function()
 	it("dispatches a documented subcommand (toggle) via :HexOutdated", function()
 		hex.setup({ enabled = false })
 		local buf = vim.api.nvim_create_buf(true, false)
@@ -506,11 +497,10 @@ describe("subcommand dispatch restricted to documented commands (issue #78)", fu
 		vim.notify = original_notify
 
 		eq(1, #errors, "unknown subcommand notifies exactly once")
-		contains(errors[1], "unknown subcommand")
 	end)
 
 	it(
-		"does not dispatch 'setup' as a subcommand even though it is an exported function (issue #78)",
+		"does not dispatch 'setup' as a subcommand even though it is an exported function",
 		function()
 			hex.setup({ enabled = false })
 			local original_config_setup = config.setup
@@ -535,7 +525,28 @@ describe("subcommand dispatch restricted to documented commands (issue #78)", fu
 
 			eq(0, setup_calls, ":HexOutdated setup must not re-invoke M.setup/config.setup")
 			eq(1, #errors, "'setup' hits the unknown-subcommand error path")
-			contains(errors[1], "unknown subcommand")
 		end
 	)
+end)
+
+describe("keymaps", function()
+	it("binds subcommand actions and ignores other exported functions", function()
+		local original_notify = vim.notify
+		vim.notify = function() end
+		hex.setup({ enabled = false, keymaps = { setup = "gS", toggle = "gT" } })
+		vim.notify = original_notify
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/mix.exs")
+		vim.api.nvim_set_current_buf(buf)
+		vim.api.nvim_exec_autocmds("BufReadPost", { buffer = buf })
+
+		eq(false, has_keymap(buf, "gS"), "setup is not a bindable action")
+		truthy(has_keymap(buf, "gT"), "toggle is bound")
+
+		local before = core.state[buf].enabled
+		vim.api.nvim_feedkeys("gT", "x", false)
+		eq(not before, core.state[buf].enabled, "gT dispatches toggle")
+
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
 end)

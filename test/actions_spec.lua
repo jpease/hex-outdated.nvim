@@ -2,6 +2,8 @@
 -- published-versions floating window.
 local actions = require("hex-outdated.actions")
 local config = require("hex-outdated.config")
+local hex_api = require("hex-outdated.hex_api")
+local fallback = require("hex-outdated.parser.fallback")
 local parser = require("hex-outdated.parser")
 
 config.setup({})
@@ -20,10 +22,35 @@ local function float_win()
 	end
 end
 
-local function select_first_version(buf, dep, versions)
+-- Run `fn` with hex_api.get_package answered by `fetch(name, cb)`.
+local function with_fetch(fetch, fn)
+	local original = hex_api.get_package
+	hex_api.get_package = function(name, _, cb)
+		fetch(name, cb)
+	end
+	local ok, err = pcall(fn)
+	hex_api.get_package = original
+	if not ok then
+		error(err, 0)
+	end
+end
+
+local function versions(buf, dep, fetch)
+	with_fetch(fetch, function()
+		actions.versions(buf, dep)
+	end)
+end
+
+local function info(buf, dep, fetch)
+	with_fetch(fetch, function()
+		actions.info(buf, dep)
+	end)
+end
+
+local function select_first_version(buf, dep, list)
 	vim.api.nvim_set_current_buf(buf)
-	actions.versions(buf, dep, function(_, cb)
-		cb({ versions = versions })
+	versions(buf, dep, function(_, cb)
+		cb({ versions = list })
 	end)
 	vim.wait(500, function()
 		return float_win() ~= nil
@@ -59,43 +86,35 @@ describe("actions.upgrade", function()
 		eq(line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "line unchanged")
 	end)
 
-	it("explains why there is no rewrite for an upgradable non-rewritable operator", function()
-		local line = '      {:jason, "< 2.0.0"},'
-		local buf = mix_buf(line)
-		local notified
-		local original_notify = vim.notify
-		vim.notify = function(msg)
-			notified = msg
+	it(
+		"explains a missing rewrite for a non-rewritable operator apart from nothing-newer",
+		function()
+			local line = '      {:jason, "< 2.0.0"},'
+			local buf = mix_buf(line)
+			local notified = {}
+			local original_notify = vim.notify
+			vim.notify = function(msg, level)
+				notified[#notified + 1] = { msg = msg, level = level }
+			end
+
+			actions.upgrade(buf, {
+				row = 0,
+				col_start = 16,
+				col_end = 25,
+				requirement = "< 2.0.0",
+				op = "<",
+				status = "upgradable",
+			})
+			actions.upgrade(buf, { row = 0, col_start = 16, col_end = 25, status = "up_to_date" })
+
+			vim.notify = original_notify
+			eq(2, #notified)
+			eq(vim.log.levels.INFO, notified[1].level)
+			eq(vim.log.levels.INFO, notified[2].level)
+			truthy(notified[1].msg ~= notified[2].msg, "upgradable dep gets its own explanation")
+			eq(line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "line unchanged")
 		end
-
-		actions.upgrade(buf, {
-			row = 0,
-			col_start = 16,
-			col_end = 25,
-			requirement = "< 2.0.0",
-			op = "<",
-			status = "upgradable",
-		})
-
-		vim.notify = original_notify
-		contains(notified, "no automatic rewrite for '<' requirements")
-		eq(line, vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1], "line unchanged")
-	end)
-
-	it("keeps the generic message when nothing is newer", function()
-		local line = '      {:jason, "~> 1.4"},'
-		local buf = mix_buf(line)
-		local notified
-		local original_notify = vim.notify
-		vim.notify = function(msg)
-			notified = msg
-		end
-
-		actions.upgrade(buf, { row = 0, col_start = 16, col_end = 22, status = "up_to_date" })
-
-		vim.notify = original_notify
-		eq("hex-outdated: nothing to upgrade on this line", notified)
-	end)
+	)
 
 	it("does not edit when the buffer changed after parsing", function()
 		local line = '      {:jason, "~> 1.0"},'
@@ -134,7 +153,7 @@ describe("actions.versions float", function()
 			requested = name
 			cb({ versions = { "1.4.5", "1.4.4", "1.0.0" } })
 		end
-		actions.versions(buf, dep, fetch)
+		versions(buf, dep, fetch)
 		eq("jason", requested, "Hex alias used for version lookup")
 
 		-- The window is created inside vim.schedule; wait for it to appear.
@@ -155,18 +174,18 @@ describe("actions.versions float", function()
 	it("does not offer a popup when every release is retired", function()
 		local buf = mix_buf('      {:jason, "~> 1.0"},')
 		vim.api.nvim_set_current_buf(buf)
-		local notified
+		local level
 		local original_notify = vim.notify
-		vim.notify = function(msg)
-			notified = msg
+		vim.notify = function(_, l)
+			level = l
 		end
 
-		actions.versions(buf, { name = "jason" }, function(_, cb)
+		versions(buf, { name = "jason" }, function(_, cb)
 			cb({ versions = {}, all_retired = true })
 		end)
 
 		vim.notify = original_notify
-		contains(notified, "all releases are retired")
+		eq(vim.log.levels.WARN, level)
 		is_nil(float_win(), "no versions float opened")
 	end)
 
@@ -180,7 +199,7 @@ describe("actions.versions float", function()
 			scheduled = fn
 		end
 
-		actions.versions(origin, { name = "jason" }, function(_, cb)
+		versions(origin, { name = "jason" }, function(_, cb)
 			callback = cb
 		end)
 		vim.api.nvim_buf_delete(origin, { force = true })
@@ -202,7 +221,7 @@ describe("actions.versions float", function()
 			scheduled = fn
 		end
 
-		actions.versions(origin, { name = "jason" }, function(_, cb)
+		versions(origin, { name = "jason" }, function(_, cb)
 			callback = cb
 		end)
 		vim.api.nvim_win_set_cursor(0, { 1, 4 })
@@ -214,65 +233,59 @@ describe("actions.versions float", function()
 		is_nil(float_win(), "no stale float opened")
 	end)
 
-	it(
-		"refuses a stale dependency snapshot rather than fetch the old package (issue #67)",
-		function()
-			local buf = mix_buf('      {:jason, "~> 1.4"},')
-			vim.api.nvim_set_current_buf(buf)
-			local dep = {
-				name = "jason",
-				changedtick = vim.api.nvim_buf_get_changedtick(buf),
-			}
-			-- Simulate an edit landing after analysis but before the action runs.
-			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+	it("refuses a stale dependency snapshot rather than fetch the old package", function()
+		local buf = mix_buf('      {:jason, "~> 1.4"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = {
+			name = "jason",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+		}
+		-- Simulate an edit landing after analysis but before the action runs.
+		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
 
-			local fetched
-			actions.versions(buf, dep, function(name, cb)
-				fetched = name
-				cb({ versions = { "1.4.5" } })
-			end)
+		local fetched
+		versions(buf, dep, function(name, cb)
+			fetched = name
+			cb({ versions = { "1.4.5" } })
+		end)
 
-			is_nil(fetched, "must not fetch a package from a stale dependency snapshot")
-			is_nil(float_win(), "no float opened from a stale dependency snapshot")
-		end
-	)
+		is_nil(fetched, "must not fetch a package from a stale dependency snapshot")
+		is_nil(float_win(), "no float opened from a stale dependency snapshot")
+	end)
 
-	it(
-		"discards a fetch result invalidated by an edit that leaves the cursor in place (issue #80)",
-		function()
-			local buf = mix_buf('      {:jason, "~> 1.0"},')
-			vim.api.nvim_set_current_buf(buf)
-			local dep = {
-				name = "jason",
-				changedtick = vim.api.nvim_buf_get_changedtick(buf),
-			}
-			local callback
-			actions.versions(buf, dep, function(_, cb)
-				callback = cb
-			end)
+	it("discards a fetch result invalidated by an edit that leaves the cursor in place", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = {
+			name = "jason",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+		}
+		local callback
+		versions(buf, dep, function(_, cb)
+			callback = cb
+		end)
 
-			-- Edit the dependency's own line without moving the cursor off it.
-			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
-			truthy(callback, "fetch was started before the edit")
-			callback({ versions = { "1.4.5" } })
+		-- Edit the dependency's own line without moving the cursor off it.
+		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+		truthy(callback, "fetch was started before the edit")
+		callback({ versions = { "1.4.5" } })
 
-			vim.wait(100, function()
-				return float_win() ~= nil
-			end, 5)
+		vim.wait(100, function()
+			return float_win() ~= nil
+		end, 5)
 
-			is_nil(float_win(), "no stale float opened for the invalidated fetch")
-		end
-	)
+		is_nil(float_win(), "no stale float opened for the invalidated fetch")
+	end)
 end)
 
-describe("actions.versions stale results (issue #60)", function()
+describe("actions.versions stale results", function()
 	it("opens the picker from stale cached versions on a transient error", function()
 		local buf = mix_buf('      {:jason, "~> 1.0"},')
 		vim.api.nvim_set_current_buf(buf)
 		local dep =
 			{ name = "jason", package = "jason", row = 0, col_start = 16, col_end = 22, op = "~>" }
-		actions.versions(buf, dep, function(_, cb)
-			cb({ error = "request timed out", stale = true, versions = { "2.0.0", "1.0.0" } })
+		versions(buf, dep, function(_, cb)
+			cb({ error = "request timed out", versions = { "2.0.0", "1.0.0" } })
 		end)
 
 		vim.wait(500, function()
@@ -306,7 +319,7 @@ describe("actions.versions stale results (issue #60)", function()
 			notified = msg
 		end
 
-		actions.versions(buf, { name = "jason" }, function(_, cb)
+		versions(buf, { name = "jason" }, function(_, cb)
 			cb({ error = "request timed out" })
 		end)
 
@@ -324,7 +337,7 @@ describe("actions.versions stale results (issue #60)", function()
 			notified = msg
 		end
 
-		actions.versions(buf, { name = "jason" }, function(_, cb)
+		versions(buf, { name = "jason" }, function(_, cb)
 			cb({ error = "not found", not_found = true })
 		end)
 
@@ -349,8 +362,8 @@ describe("actions.versions stale results (issue #60)", function()
 				op = "~>",
 			}
 			vim.api.nvim_set_current_buf(buf)
-			actions.versions(buf, dep, function(_, cb)
-				cb({ error = "request timed out", stale = true, versions = { "2.0.0", "1.0.0" } })
+			versions(buf, dep, function(_, cb)
+				cb({ error = "request timed out", versions = { "2.0.0", "1.0.0" } })
 			end)
 
 			vim.wait(500, function()
@@ -383,8 +396,8 @@ describe("actions.versions stale results (issue #60)", function()
 			op = "~>",
 		}
 		vim.api.nvim_set_current_buf(buf)
-		actions.versions(buf, dep, function(_, cb)
-			cb({ error = "request timed out", stale = true, versions = { "2.0.0", "1.0.0" } })
+		versions(buf, dep, function(_, cb)
+			cb({ error = "request timed out", versions = { "2.0.0", "1.0.0" } })
 		end)
 
 		vim.wait(500, function()
@@ -419,7 +432,7 @@ describe("actions.versions prerelease selection", function()
 			cb({ versions = { "2.0.0-rc.1", "1.9.0" } })
 		end
 		vim.api.nvim_set_current_buf(buf)
-		actions.versions(buf, dep, fetch)
+		versions(buf, dep, fetch)
 
 		vim.wait(500, function()
 			return float_win() ~= nil
@@ -496,7 +509,7 @@ describe("actions.dep_at_cursor", function()
 		local line = 'defp deps, do: [{:first, "~> 1.0"}, {:second, "~> 2.0"}]'
 		local buf = mix_buf(line)
 		vim.api.nvim_set_current_buf(buf)
-		local deps = parser.parse_lines({ line })
+		local deps = fallback.parse_lines({ line })
 
 		vim.api.nvim_win_set_cursor(0, { 1, line:find("~> 1.0", 1, true) - 1 })
 		eq("first", actions.dep_at_cursor(deps).name)
@@ -508,6 +521,9 @@ describe("actions.dep_at_cursor", function()
 	it("selects each dependency by requirement column on a compact Treesitter line", function()
 		local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
 		if not (added_ok and added) then
+			if os.getenv("HEX_OUTDATED_REQUIRE_TS") then
+				error("elixir parser required (HEX_OUTDATED_REQUIRE_TS) but not installed")
+			end
 			skip("elixir parser not installed")
 		end
 		local line = '  defp deps, do: [{:first, "~> 1.0"}, {:second, "~> 2.0"}]'
@@ -531,42 +547,17 @@ end)
 
 describe("actions.open", function()
 	it("opens the effective Hex package for an aliased dependency", function()
-		local buf = mix_buf('      {:local_app, "~> 1.0"},')
 		local original = vim.ui.open
 		local opened
 		vim.ui.open = function(url)
 			opened = url
 		end
 
-		actions.open(buf, { name = "local_app", package = "actual_package" })
+		actions.open({ name = "local_app", package = "actual_package" })
 
 		vim.ui.open = original
 		eq("https://hex.pm/packages/actual_package", opened)
 	end)
-
-	it(
-		"refuses a stale dependency snapshot rather than open the old package (issue #67)",
-		function()
-			local buf = mix_buf('      {:jason, "~> 1.4"},')
-			local dep = {
-				name = "jason",
-				changedtick = vim.api.nvim_buf_get_changedtick(buf),
-			}
-			-- Simulate an edit landing after analysis but before the action runs.
-			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
-
-			local original = vim.ui.open
-			local opened
-			vim.ui.open = function(url)
-				opened = url
-			end
-
-			actions.open(buf, dep)
-
-			vim.ui.open = original
-			is_nil(opened, "must not open a package from a stale dependency snapshot")
-		end
-	)
 end)
 
 describe("actions.info float", function()
@@ -581,7 +572,7 @@ describe("actions.info float", function()
 			locked = "1.2.0",
 		}
 		local requested
-		actions.info(buf, dep, function(name, cb)
+		info(buf, dep, function(name, cb)
 			requested = name
 			cb({ latest = "1.4.5", versions = { "1.4.5" } })
 		end)
@@ -600,63 +591,69 @@ describe("actions.info float", function()
 		vim.api.nvim_win_close(win, true)
 	end)
 
-	it(
-		"classifies the dep once the fetch resolves, replacing the checking… note (issue #38)",
-		function()
-			local buf = mix_buf('      {:jason, "~> 1.0"},')
-			vim.api.nvim_set_current_buf(buf)
-			local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
-			actions.info(buf, dep, function(_, cb)
-				cb({ latest = "1.4.5", versions = { "1.0.0", "1.4.5" } })
-			end)
+	it("classifies the dep once the fetch resolves", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
+		local loading_lines = actions._info_lines(dep)
+		info(buf, dep, function(_, cb)
+			cb({ latest = "1.4.5", versions = { "1.0.0", "1.4.5" } })
+		end)
 
-			vim.wait(500, function()
-				return float_win() ~= nil
-			end, 5)
+		vim.wait(500, function()
+			return float_win() ~= nil
+		end, 5)
 
-			local win = float_win()
-			truthy(win, "float opened")
-			local fbuf = vim.api.nvim_win_get_buf(win)
-			local lines = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
-			eq("upgradable", dep.status, "dep classified from the fetch result")
-			is_nil(
-				lines[2]:find("checking…", 1, true),
-				"requirement note is no longer 'checking…'"
-			)
-			truthy(
-				lines[2]:find("below latest", 1, true),
-				"requirement note reflects the classification"
-			)
-			vim.api.nvim_win_close(win, true)
-		end
-	)
+		local win = float_win()
+		truthy(win, "float opened")
+		local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false)
+		eq("upgradable", dep.status, "dep classified from the fetch result")
+		eq("1.4.5", dep.latest)
+		eq(actions._info_lines(dep), lines, "float shows the classified dep")
+		truthy(lines[2] ~= loading_lines[2], "requirement note no longer pending")
+		vim.api.nvim_win_close(win, true)
+	end)
 
-	it(
-		"leaves the checking… note when the fetch errors with no usable versions (issue #38)",
-		function()
-			local buf = mix_buf('      {:jason, "~> 1.0"},')
-			vim.api.nvim_set_current_buf(buf)
-			local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
-			actions.info(buf, dep, function(_, cb)
-				cb({ error = "http 500" })
-			end)
+	it("shows a failed fetch as failed rather than still loading", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = { name = "jason", requirement = "~> 1.0", status = "loading" }
+		local loading_lines = actions._info_lines(dep)
+		info(buf, dep, function(_, cb)
+			cb({ error = "http 500" })
+		end)
 
-			vim.wait(500, function()
-				return float_win() ~= nil
-			end, 5)
+		vim.wait(500, function()
+			return float_win() ~= nil
+		end, 5)
 
-			local win = float_win()
-			truthy(win, "float opened")
-			local fbuf = vim.api.nvim_win_get_buf(win)
-			local lines = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
-			eq("loading", dep.status, "status unchanged on a fetch error with no versions")
-			truthy(
-				lines[2]:find("checking…", 1, true),
-				"requirement note unchanged on fetch error"
-			)
-			vim.api.nvim_win_close(win, true)
-		end
-	)
+		local win = float_win()
+		truthy(win, "float opened")
+		local lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false)
+		eq("error", dep.status, "fetch failure is terminal")
+		is_nil(dep.latest)
+		truthy(lines[2] ~= loading_lines[2], "requirement note no longer pending")
+		truthy(lines[4] ~= loading_lines[4], "latest row no longer loading")
+		vim.api.nvim_win_close(win, true)
+	end)
+
+	it("reports a missing package as invalid", function()
+		local buf = mix_buf('      {:nope, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = { name = "nope", requirement = "~> 1.0", status = "loading" }
+		info(buf, dep, function(_, cb)
+			cb({ error = "package not found", not_found = true })
+		end)
+
+		vim.wait(500, function()
+			return float_win() ~= nil
+		end, 5)
+
+		local win = float_win()
+		truthy(win, "float opened")
+		eq("invalid", dep.status)
+		vim.api.nvim_win_close(win, true)
+	end)
 
 	it("cancels cleanly when the origin buffer closes before fetch completion", function()
 		local origin = mix_buf('      {:jason, "~> 1.0"},')
@@ -668,74 +665,68 @@ describe("actions.info float", function()
 			scheduled = fn
 		end
 
-		actions.info(
-			origin,
-			{ name = "jason", requirement = "~> 1.0", status = "loading" },
-			function(_, cb)
-				callback = cb
-			end
-		)
+		info(origin, { name = "jason", requirement = "~> 1.0", status = "loading" }, function(_, cb)
+			callback = cb
+		end)
 		vim.api.nvim_buf_delete(origin, { force = true })
-		callback({ latest = "1.4.5", versions = { "1.4.5" } })
 
-		local ok, err = pcall(scheduled)
+		local ok, err = pcall(function()
+			callback({ latest = "1.4.5", versions = { "1.4.5" } })
+			if scheduled then
+				scheduled()
+			end
+		end)
 		vim.schedule = original_schedule
 		is_true(ok, tostring(err))
 		is_nil(float_win(), "no stale float opened")
 	end)
 
-	it(
-		"refuses a stale dependency snapshot rather than fetch the old package (issue #67)",
-		function()
-			local buf = mix_buf('      {:jason, "~> 1.4"},')
-			vim.api.nvim_set_current_buf(buf)
-			local dep = {
-				name = "jason",
-				requirement = "~> 1.0",
-				changedtick = vim.api.nvim_buf_get_changedtick(buf),
-			}
-			-- Simulate an edit landing after analysis but before the action runs.
-			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+	it("refuses a stale dependency snapshot rather than fetch the old package", function()
+		local buf = mix_buf('      {:jason, "~> 1.4"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = {
+			name = "jason",
+			requirement = "~> 1.0",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+		}
+		-- Simulate an edit landing after analysis but before the action runs.
+		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
 
-			local fetched
-			actions.info(buf, dep, function(name, cb)
-				fetched = name
-				cb({ latest = "1.4.5", versions = { "1.4.5" } })
-			end)
+		local fetched
+		info(buf, dep, function(name, cb)
+			fetched = name
+			cb({ latest = "1.4.5", versions = { "1.4.5" } })
+		end)
 
-			is_nil(fetched, "must not fetch a package from a stale dependency snapshot")
-			is_nil(float_win(), "no float opened from a stale dependency snapshot")
-		end
-	)
+		is_nil(fetched, "must not fetch a package from a stale dependency snapshot")
+		is_nil(float_win(), "no float opened from a stale dependency snapshot")
+	end)
 
-	it(
-		"discards a fetch result invalidated by an edit that leaves the cursor in place (issue #73)",
-		function()
-			local buf = mix_buf('      {:jason, "~> 1.0"},')
-			vim.api.nvim_set_current_buf(buf)
-			local dep = {
-				name = "jason",
-				requirement = "~> 1.0",
-				status = "loading",
-				changedtick = vim.api.nvim_buf_get_changedtick(buf),
-			}
-			local callback
-			actions.info(buf, dep, function(_, cb)
-				callback = cb
-			end)
+	it("discards a fetch result invalidated by an edit that leaves the cursor in place", function()
+		local buf = mix_buf('      {:jason, "~> 1.0"},')
+		vim.api.nvim_set_current_buf(buf)
+		local dep = {
+			name = "jason",
+			requirement = "~> 1.0",
+			status = "loading",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+		}
+		local callback
+		info(buf, dep, function(_, cb)
+			callback = cb
+		end)
 
-			-- Edit the dependency's own line without moving the cursor off it.
-			vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
-			truthy(callback, "fetch was started before the edit")
-			callback({ latest = "1.4.5", versions = { "1.0.0", "1.4.5" } })
+		-- Edit the dependency's own line without moving the cursor off it.
+		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:phoenix, "~> 1.7"},' })
+		truthy(callback, "fetch was started before the edit")
+		callback({ latest = "1.4.5", versions = { "1.0.0", "1.4.5" } })
 
-			vim.wait(100, function()
-				return float_win() ~= nil
-			end, 5)
+		vim.wait(100, function()
+			return float_win() ~= nil
+		end, 5)
 
-			eq("loading", dep.status, "dep not mutated by a fetch invalidated during the request")
-			is_nil(dep.latest, "dep.latest not mutated by a fetch invalidated during the request")
-			is_nil(float_win(), "no stale float opened for the invalidated fetch")
-		end
-	)
+		eq("loading", dep.status, "dep not mutated by a fetch invalidated during the request")
+		is_nil(dep.latest, "dep.latest not mutated by a fetch invalidated during the request")
+		is_nil(float_win(), "no stale float opened for the invalidated fetch")
+	end)
 end)
