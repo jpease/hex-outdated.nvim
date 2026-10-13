@@ -1,12 +1,6 @@
 local config = require("hex-outdated.config")
 
--- README.md and doc/hex-outdated.txt each carry a full copy of the defaults
--- table, and between them hold the only prose explanation of what each option
--- does -- `config.lua` itself carries one comment. Three copies drift silently:
--- both docs described `lens = false` as "show the locked-version lens by
--- default" from 4af3d61 (2026-06-15), the commit that first documented the
--- option, and no code comment existed to contradict them. These tests fail the
--- suite on any value or key divergence.
+-- The defaults tables in README.md and doc/hex-outdated.txt must match config.defaults.
 
 --- Pull the multi-line `require("hex-outdated").setup({ ... })` block out of a
 --- doc file. Matches on the trimmed line so the vimdoc's 4-space indent works,
@@ -79,14 +73,11 @@ local function divergences(documented, actual, prefix, out)
 	return out
 end
 
-for _, doc in ipairs({
-	{ name = "README.md", path = "README.md" },
-	{ name = "doc/hex-outdated.txt", path = "doc/hex-outdated.txt" },
-}) do
-	describe(doc.name .. " config block", function()
-		it("matches config.defaults exactly", function()
-			local found = divergences(eval_block(doc.path), config.defaults)
+describe("documented config block", function()
+	for _, path in ipairs({ "README.md", "doc/hex-outdated.txt" }) do
+		it(path .. " matches config.defaults exactly", function()
+			local found = divergences(eval_block(path), config.defaults)
 			assert.are.equal("", table.concat(found, "\n"))
 		end)
-	end)
-end
+	end
+end)

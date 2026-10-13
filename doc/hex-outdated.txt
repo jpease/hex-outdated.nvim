@@ -11,9 +11,10 @@ CONTENTS                                                  *hex-outdated-contents
   6. Status meanings ...................... |hex-outdated-status|
   7. Lock context ......................... |hex-outdated-lock|
   8. Configuration ........................ |hex-outdated-configuration|
-  9. Highlight groups ..................... |hex-outdated-highlights|
-  10. Health .............................. |hex-outdated-health|
-  11. How it works ........................ |hex-outdated-how-it-works|
+  9. Keymaps .............................. |hex-outdated-keymaps|
+  10. Highlight groups .................... |hex-outdated-highlights|
+  11. Health .............................. |hex-outdated-health|
+  12. How it works ........................ |hex-outdated-how-it-works|
 
 ==============================================================================
 1. INTRODUCTION                                       *hex-outdated-introduction*
@@ -62,11 +63,11 @@ With vim-plug: >vim
     lua require("hex-outdated").setup({})
 <
 As a native package (no plugin manager), clone into a `pack/*/start`
-directory, then call setup from your init.lua: >sh
+directory: >sh
     git clone https://github.com/jpease/hex-outdated.nvim \
       ~/.config/nvim/pack/plugins/start/hex-outdated.nvim
 <
->lua
+then call setup from your init.lua: >lua
     require("hex-outdated").setup({})
 <
 Every manager other than lazy.nvim's `opts = {}` needs an explicit
@@ -135,18 +136,16 @@ requirement status stays primary:
     `mix deps.get`.
 
 All of this no-ops when there is no `mix.lock`. Disable it entirely with
-`lock = { enabled = false }`. The K binding only acts on dependency lines and
-otherwise falls through to LSP hover / 'keywordprg'; set `popup.hover_key`
-to false to leave K alone.
+`lock = { enabled = false }`.
 
 ==============================================================================
 8. CONFIGURATION                                    *hex-outdated-configuration*
 
 `setup` merges your options over the defaults: >lua
     require("hex-outdated").setup({
-      enabled = true,
-      auto_update = true,        -- re-analyze on buffer changes
-      debounce_ms = 500,
+      enabled = true,          -- show status when a mix.exs opens
+      auto_update = true,      -- re-analyze on buffer changes
+      debounce_ms = 500,       -- delay (milliseconds) before re-analyzing
       api = {
         base_url = "https://hex.pm/api",
         timeout_ms = 5000,    -- invalid/non-positive values use 5000
@@ -158,7 +157,7 @@ to false to leave K alone.
         stale_diagnostic = true, -- warn when the lock no longer satisfies req
       },
       cache = {
-        ttl_seconds = 3600,
+        ttl_seconds = 3600,     -- how long a successful fetch is cached
         error_ttl_seconds = 60, -- how long a failed fetch is cached before retry
       },
       text = {                   -- %s is the latest version
@@ -181,14 +180,36 @@ to false to leave K alone.
         lock = "HexOutdatedLock",
         lock_behind = "HexOutdatedLockBehind",
       },
-      popup = { border = "rounded", max_height = 20, hover_key = "K" },
-      -- opt-in buffer-local keymaps (unset by default), e.g.
-      -- { upgrade = "<leader>cu", versions = "<leader>cv", info = "<leader>ci" }
-      keymaps = {},
+      popup = {
+        border = "rounded",    -- any nvim_open_win() border
+        max_height = 20,       -- max lines in the versions/info float
+        hover_key = "K",       -- see |hex-outdated-keymaps|
+      },
+      keymaps = {},            -- see |hex-outdated-keymaps|
     })
 <
+`enabled` sets each buffer's initial display state; `:HexOutdated toggle`
+flips it per buffer and the commands work either way.
+
 ==============================================================================
-9. HIGHLIGHT GROUPS                                     *hex-outdated-highlights*
+9. KEYMAPS                                                *hex-outdated-keymaps*
+
+`popup.hover_key` (default "K") is mapped in every `mix.exs` buffer. On a
+dependency line it opens the detail float (`:HexOutdated info`); elsewhere it
+falls through to `normal! K` (LSP hover or 'keywordprg'). Set it to another
+key, or to `false` to leave K unmapped.
+
+`keymaps` adds buffer-local mappings in `mix.exs` buffers, as action = lhs.
+Valid actions are the |:HexOutdated| subcommands: `refresh`, `toggle`,
+`upgrade`, `versions`, `open`, `info`, `lock`. Unset by default: >lua
+    keymaps = {
+      upgrade = "<leader>cu",
+      versions = "<leader>cv",
+      info = "<leader>ci",
+    }
+<
+==============================================================================
+10. HIGHLIGHT GROUPS                                    *hex-outdated-highlights*
 
 Highlight groups link to `Diagnostic*` by default and respect your colorscheme
 if you define them first:
@@ -203,13 +224,13 @@ if you define them first:
   HexOutdatedLockBehind
 
 ==============================================================================
-10. HEALTH                                                  *hex-outdated-health*
+11. HEALTH                                                  *hex-outdated-health*
 
 Run |:checkhealth| hex-outdated to verify Neovim version, `curl`, and the
 `elixir` Treesitter parser.
 
 ==============================================================================
-11. HOW IT WORKS                                      *hex-outdated-how-it-works*
+12. HOW IT WORKS                                      *hex-outdated-how-it-works*
 
 hex-outdated parses `mix.exs` with Treesitter (Lua-pattern fallback) to find
 dependency tuples inside the function referenced by the project's `deps:`

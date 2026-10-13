@@ -19,7 +19,7 @@ diagnostics.
 - Non-existent versions/packages also show up as real `vim.diagnostic` entries
 - One-key actions: upgrade the requirement under the cursor, browse published
   versions, or open the package on hex.pm
-- Treesitter parsing with a dependency-free Lua-pattern fallback
+- Treesitter parsing, with a Lua-pattern fallback when the elixir parser is missing
 - Status comes from `mix.exs` alone — no shelling out to `mix`
 - Async, cached hex.pm requests; configurable text, highlights, and keymaps
 
@@ -152,9 +152,9 @@ to leave `K` alone.
 
 ```lua
 require("hex-outdated").setup({
-  enabled = true,
+  enabled = true,            -- show status when a mix.exs opens (:HexOutdated toggle flips it per buffer)
   auto_update = true,        -- re-analyze on buffer changes
-  debounce_ms = 500,
+  debounce_ms = 500,         -- delay (milliseconds) before re-analyzing after an edit
   api = {
     base_url = "https://hex.pm/api",
     timeout_ms = 5000,          -- invalid/non-positive values use 5000
@@ -166,7 +166,7 @@ require("hex-outdated").setup({
     stale_diagnostic = true,   -- warn when the lock no longer satisfies the requirement
   },
   cache = {
-    ttl_seconds = 3600,
+    ttl_seconds = 3600,        -- how long a successful fetch is cached
     error_ttl_seconds = 60,    -- how long a failed fetch is cached before retry
   },
   text = {                   -- %s is the latest version
@@ -189,8 +189,13 @@ require("hex-outdated").setup({
     lock = "HexOutdatedLock",
     lock_behind = "HexOutdatedLockBehind",
   },
-  popup = { border = "rounded", max_height = 20, hover_key = "K" }, -- hover_key=false disables auto-K
-  -- opt-in buffer-local keymaps (unset by default):
+  popup = {
+    border = "rounded",      -- any nvim_open_win() border
+    max_height = 20,         -- max lines in the versions/info float
+    hover_key = "K",         -- key for the detail float; false leaves K unmapped
+  },
+  -- buffer-local keymaps, action = lhs; actions are the :HexOutdated
+  -- subcommands: refresh, toggle, upgrade, versions, open, info, lock
   keymaps = {}, -- e.g. { upgrade = "<leader>cu", versions = "<leader>cv", info = "<leader>ci" }
 })
 ```
@@ -217,24 +222,21 @@ There is no shelling out to `mix`.
 ## Development
 
 ```
-just check     # stylua --check, luacheck, busted, headless-nvim suite
-just test      # busted (pure logic, no Neovim)
-just test-nvim # headless-Neovim integration suite
+just check     # fmt-check, lint, test, test-nvim
+just test      # busted suite in spec/ (no Neovim)
+just test-nvim # nvim --headless -u NONE -i NONE -l test/run.lua
 just format    # stylua
 just lint      # luacheck
 ```
 
-The split is by what a test needs to run. `spec/` is the busted suite: anything
-that runs without Neovim, stubbing the `vim` APIs a module touches. `test/` is
-everything that needs a real editor — Treesitter parsing, extmark/diagnostic
-rendering, the curl queue, and buffer actions — run against a headless Neovim
-with `nvim --headless -u NONE -l test/run.lua` (no busted/luarocks needed).
-Both suites run in CI.
+`spec/` holds specs that run without Neovim, stubbing the `vim` APIs a module
+touches. `test/` holds specs that need a real editor (Treesitter, extmarks,
+diagnostics, jobs, buffers) and runs with only `nvim` on PATH.
 
-CI runs the Lua checks on Ubuntu and macOS, and the dependency-free
-headless-Neovim integration suite on Ubuntu, macOS, and Windows. CI installs the
-Elixir Treesitter parser best-effort on Linux; parser-independent and
-platform-sensitive regressions run on every integration platform.
+CI runs stylua and luacheck on Ubuntu, busted on Ubuntu and macOS, and the
+headless suite on Ubuntu, macOS, and Windows. The Ubuntu and macOS legs install
+the elixir Treesitter parser and set `HEX_OUTDATED_REQUIRE_TS=1`, so the
+Treesitter specs fail rather than skip if it is missing.
 
 ## License
 

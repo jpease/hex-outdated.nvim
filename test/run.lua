@@ -1,14 +1,12 @@
 -- Headless-Neovim integration test runner.
 --
--- Run with:  nvim --headless -u NONE -l test/run.lua
--- (`-u NONE` skips your config for a hermetic run while keeping installed
--- Treesitter parsers on the default runtimepath.)
+-- Run with:  nvim --headless -u NONE -i NONE -l test/run.lua
+-- (`-u NONE` skips your config while keeping installed Treesitter parsers on
+-- the default runtimepath.)
 --
--- These specs exercise the Neovim-coupled modules (Treesitter parsing, extmark
--- and diagnostic rendering, the curl queue, buffer actions) against a real
--- Neovim, which the busted suite under `spec/` cannot do because it stubs `vim`.
--- The runner is intentionally dependency-free: no busted, no luarocks, no nlua,
--- so CI only needs a Neovim binary on PATH.
+-- test/ holds specs that need a real editor (Treesitter, extmarks, diagnostics,
+-- jobs, buffers); spec/ is the busted suite, which runs without Neovim and
+-- stubs the `vim` APIs a module touches. This runner needs only `nvim` on PATH.
 
 local root = vim.fn.getcwd()
 vim.opt.runtimepath:append(root)
