@@ -17,8 +17,20 @@ jobs:
           version: latest
           args: --check .
 
-  lint-test:
-    name: luacheck + busted (${{ matrix.os }})
+  luacheck:
+    name: luacheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: leafo/gh-actions-lua@v13
+        with:
+          luaVersion: "5.4"
+      - uses: leafo/gh-actions-luarocks@v6
+      - run: luarocks install luacheck
+      - run: luacheck .
+
+  busted:
+    name: busted (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -30,37 +42,42 @@ jobs:
         with:
           luaVersion: "5.4"
       - uses: leafo/gh-actions-luarocks@v6
-      - name: Install tools
-        run: |
-          luarocks install luacheck
-          luarocks install busted
-      - name: Lint
-        run: luacheck .
-      - name: Test
-        run: busted
+      - run: luarocks install busted
+      - run: busted
 
   integration:
     name: headless neovim (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            require_ts: "1"
+          - os: macos-latest
+            require_ts: "1"
+          # No parser on Windows: nvim-treesitter's build needs a C toolchain
+          # this leg doesn't set up; the parser spec skips there.
+          - os: windows-latest
+            require_ts: ""
     runs-on: ${{ matrix.os }}
+    env:
+      HEX_OUTDATED_REQUIRE_TS: ${{ matrix.require_ts }}
     steps:
       - uses: actions/checkout@v6
       - uses: rhysd/action-setup-vim@v1
         with:
           neovim: true
           version: stable
-      # Best effort: install the elixir Treesitter parser so the parsing path is
-      # exercised too. If it fails, the parser spec skips itself rather than the
-      # whole job failing — the rest of the integration suite needs no parser.
       - name: Install elixir Treesitter parser
-        if: runner.os == 'Linux'
-        continue-on-error: true
+        if: matrix.require_ts == '1'
+        shell: bash
         run: |
-          git clone --depth 1 https://github.com/nvim-treesitter/nvim-treesitter \
-            "$HOME/.local/share/nvim/site/pack/ts/start/nvim-treesitter"
-          nvim --headless -u NONE -i NONE "+TSInstallSync! elixir" +qa
+          ts="$RUNNER_TEMP/nvim-treesitter"
+          git clone --depth 1 -b master https://github.com/nvim-treesitter/nvim-treesitter "$ts"
+          nvim --headless -u NONE -i NONE --cmd "set rtp^=$ts" \
+            -c "runtime! plugin/nvim-treesitter.lua" -c "TSInstallSync! elixir" -c qa
+          site="$(nvim --headless -u NONE -i NONE --cmd 'lua io.write(vim.fn.stdpath("data"))' -c qa)/site/parser"
+          mkdir -p "$site"
+          cp "$ts/parser/elixir.so" "$site/"
       - name: Integration tests
         run: nvim --headless -u NONE -i NONE -l test/run.lua
