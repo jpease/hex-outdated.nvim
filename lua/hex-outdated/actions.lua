@@ -170,9 +170,12 @@ function M.upgrade(bufnr, dep)
 end
 
 --- Open the package's hex.pm page in a browser.
-function M.open(dep)
+function M.open(bufnr, dep)
 	if not dep then
 		vim.notify("hex-outdated: no dependency on this line", vim.log.levels.INFO)
+		return
+	end
+	if not is_fresh(bufnr, dep) then
 		return
 	end
 	vim.ui.open("https://hex.pm/packages/" .. (dep.package or dep.name))

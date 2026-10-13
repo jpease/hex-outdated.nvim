@@ -546,17 +546,52 @@ describe("actions.dep_at_cursor", function()
 end)
 
 describe("actions.open", function()
-	it("opens the effective Hex package for an aliased dependency", function()
-		local original = vim.ui.open
-		local opened
+	-- Run `fn` with vim.ui.open and vim.notify captured; returns the opened URL
+	-- and the WARN-level messages.
+	local function capture_open(fn)
+		local original_open, original_notify = vim.ui.open, vim.notify
+		local opened, warnings = nil, {}
 		vim.ui.open = function(url)
 			opened = url
 		end
+		vim.notify = function(msg, level)
+			if level == vim.log.levels.WARN then
+				warnings[#warnings + 1] = msg
+			end
+		end
+		local ok, err = pcall(fn)
+		vim.ui.open, vim.notify = original_open, original_notify
+		is_true(ok, tostring(err))
+		return opened, warnings
+	end
 
-		actions.open({ name = "local_app", package = "actual_package" })
+	it("opens the effective Hex package for a fresh aliased dependency", function()
+		local buf = mix_buf('      {:local_app, "~> 1.0", hex: :actual_package},')
+		local dep = {
+			name = "local_app",
+			package = "actual_package",
+			changedtick = vim.api.nvim_buf_get_changedtick(buf),
+		}
 
-		vim.ui.open = original
+		local opened = capture_open(function()
+			actions.open(buf, dep)
+		end)
+
 		eq("https://hex.pm/packages/actual_package", opened)
+	end)
+
+	it("refuses a stale dependency snapshot rather than open the old package", function()
+		local buf = mix_buf('      {:jason, "~> 1.4"},')
+		local dep = { name = "jason", changedtick = vim.api.nvim_buf_get_changedtick(buf) }
+		-- An edit lands after analysis but before the action runs.
+		vim.api.nvim_buf_set_lines(buf, 0, 1, false, { '      {:decimal, "~> 2.0"},' })
+
+		local opened, warnings = capture_open(function()
+			actions.open(buf, dep)
+		end)
+
+		is_nil(opened, "must not open a package from a stale dependency snapshot")
+		eq(1, #warnings, "stale snapshot warns")
 	end)
 end)
 

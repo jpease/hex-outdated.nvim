@@ -41,8 +41,8 @@ function M.upgrade()
 end
 
 function M.open()
-	local _, deps = current_deps()
-	actions.open(actions.dep_at_cursor(deps))
+	local bufnr, deps = current_deps()
+	actions.open(bufnr, actions.dep_at_cursor(deps))
 end
 
 function M.versions()

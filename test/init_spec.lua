@@ -424,10 +424,12 @@ describe("auto_update debounce timer handle leak", function()
 end)
 
 describe("read-only actions reject a stale dependency snapshot", function()
-	it("info/versions ignore a dep snapshot an edit invalidated after analysis", function()
+	-- Analyze a real mix.exs buffer holding jason with fetches left unresolved
+	-- (only the changedtick stamping matters; each action must refuse before
+	-- ever fetching), then apply `edit` and run `fn` with vim.ui.open and
+	-- WARN notifications captured. Returns the opened URL and the warning count.
+	local function after_stale_edit(edit, fn)
 		local original_get_package = hex_api.get_package
-		-- Left unresolved: only changedtick stamping from the initial analyze
-		-- matters here, and each action must refuse before ever calling this.
 		hex_api.get_package = function() end
 
 		hex.setup({ enabled = true, auto_update = false })
@@ -451,23 +453,54 @@ describe("read-only actions reject a stale dependency snapshot", function()
 		vim.api.nvim_win_set_cursor(0, { 2, 4 })
 		-- An edit lands (e.g. during the debounce window) after analysis but
 		-- before anything re-analyzes; core.state[buf].deps still holds jason.
-		vim.api.nvim_buf_set_lines(buf, 1, 2, false, { '  [{:phoenix, "~> 1.7"}]' })
+		edit(buf)
 
-		local original_notify = vim.notify
-		local warned = 0
+		local original_open, original_notify = vim.ui.open, vim.notify
+		local opened, warned = nil, 0
+		vim.ui.open = function(url)
+			opened = url
+		end
 		vim.notify = function(_, level)
 			if level == vim.log.levels.WARN then
 				warned = warned + 1
 			end
 		end
-		hex.versions()
-		hex.info()
-		vim.notify = original_notify
+		local ok, err = pcall(fn)
+		vim.ui.open, vim.notify = original_open, original_notify
 		hex_api.get_package = original_get_package
-
-		eq(2, warned, "versions and info both warn instead of fetching the stale snapshot")
-
 		vim.api.nvim_buf_delete(buf, { force = true })
+		is_true(ok, tostring(err))
+		return opened, warned
+	end
+
+	it("open/info/versions ignore a dep renamed on its own row after analysis", function()
+		local opened, warned = after_stale_edit(function(buf)
+			vim.api.nvim_buf_set_lines(buf, 1, 2, false, { '  [{:decimal, "~> 2.0"}]' })
+		end, function()
+			hex.open()
+			hex.versions()
+			hex.info()
+		end)
+
+		is_nil(opened, "open must not launch a package from the stale snapshot")
+		eq(3, warned, "open, versions, and info each warn instead of using the stale snapshot")
+	end)
+
+	it("open ignores old row metadata after an edit shifts dependency rows", function()
+		local opened, warned = after_stale_edit(function(buf)
+			-- Insert decimal above jason: the cursor row now holds decimal while
+			-- the stale metadata still places jason there.
+			vim.api.nvim_buf_set_lines(buf, 1, 2, false, {
+				'  [{:decimal, "~> 2.0"},',
+				'   {:jason, "~> 1.4"}]',
+			})
+			vim.api.nvim_win_set_cursor(0, { 2, 4 })
+		end, function()
+			hex.open()
+		end)
+
+		is_nil(opened, "open must not launch a package from old row metadata")
+		eq(1, warned, "open warns instead of using old row metadata")
 	end)
 end)
 
