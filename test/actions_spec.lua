@@ -521,8 +521,8 @@ describe("actions.dep_at_cursor", function()
 	it("selects each dependency by requirement column on a compact Treesitter line", function()
 		local added_ok, added = pcall(vim.treesitter.language.add, "elixir")
 		if not (added_ok and added) then
-			if os.getenv("HEX_OUTDATED_REQUIRE_TS") then
-				error("elixir parser required (HEX_OUTDATED_REQUIRE_TS) but not installed")
+			if vim.env.HEX_OUTDATED_REQUIRE_TS == "1" then
+				error("elixir parser not installed but HEX_OUTDATED_REQUIRE_TS=1")
 			end
 			skip("elixir parser not installed")
 		end
