@@ -89,6 +89,36 @@ describe("parser (treesitter)", function()
 		eq("jason", result[1].name)
 		eq("~> 1.4", result[1].requirement)
 	end)
+
+	it("keeps a later sibling's hex alias out of an unfinished tuple mid-edit", function()
+		local lines = {
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			"    [",
+			'      {:a, "~> 1.0",',
+			'      {:b, "~> 2.0", hex: :c}',
+			"    ]",
+			"  end",
+			"end",
+		}
+		local b = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+		vim.bo[b].filetype = "elixir"
+		is_true(
+			vim.treesitter.get_parser(b, "elixir"):parse()[1]:root():has_error(),
+			"input is a syntax-error tree"
+		)
+		local deps = parser.parse_buffer(b)
+		vim.api.nvim_buf_delete(b, { force = true })
+
+		eq({ "a", "b" }, { deps[1].name, deps[2].name })
+		eq(2, #deps)
+		is_nil(deps[1].package, "unfinished a is not aliased by b's option")
+		eq("c", deps[2].package)
+		for i, req in ipairs({ "~> 1.0", "~> 2.0" }) do
+			eq(req, lines[deps[i].row + 1]:sub(deps[i].col_start + 1, deps[i].col_end))
+		end
+	end)
 end)
 
 -- Both backends must agree on well-formed mix.exs input.
@@ -1040,6 +1070,81 @@ describe("parser parity: treesitter vs fallback", function()
 				"  end",
 				'  defp other, do: [{:wrong, "~> 1.0"}]',
 				'  defp deps, do: [{:real, "~> 1.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "deps/0 composed with ++ in project/0",
+			expect = { "jason" },
+			lines = {
+				"defmodule A.MixProject do",
+				"  def project do",
+				"    [app: :a, deps: deps() ++ extra()]",
+				"  end",
+				"  defp deps do",
+				'    [{:jason, "~> 1.0"}]',
+				"  end",
+				"  defp extra, do: []",
+				"end",
+			},
+		},
+		{
+			desc = "composed custom source scoped to the project module",
+			expect = { "real" },
+			lines = {
+				"defmodule Other do",
+				'  defp project_deps, do: [{:earlier, "~> 1.0"}]',
+				"end",
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [app: :demo, deps: project_deps() ++ extra() ++ more()]",
+				"  end",
+				"  defmodule Nested do",
+				'    defp project_deps, do: [{:nested, "~> 1.0"}]',
+				"  end",
+				'  defp deps, do: [{:default, "~> 1.0"}]',
+				'  defp project_deps, do: [{:real, "~> 1.0"}]',
+				"  defp extra, do: []",
+				"  defp more, do: []",
+				"end",
+			},
+		},
+		{
+			desc = "inline list leading a ++ chain",
+			expect = { "inline" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				'    [app: :demo, deps: [{:inline, "~> 1.0"}] ++ extra()]',
+				"  end",
+				'  defp extra, do: [{:extra, "~> 1.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "unresolvable composed source does not fall back to deps/0",
+			expect = {},
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  def project do",
+				"    [app: :demo, deps: custom() |> Enum.reject(&skip?/1)]",
+				"  end",
+				'  defp custom, do: [{:custom_dep, "~> 1.0"}]',
+				'  defp deps, do: [{:unrelated, "~> 1.0"}]',
+				"end",
+			},
+		},
+		{
+			desc = "hex: inside a nested option value is not the tuple's alias",
+			expect = { "a", "b" },
+			lines = {
+				"defmodule Demo.MixProject do",
+				"  defp deps do",
+				"    [",
+				'      {:a, "~> 1.0", opts: [hex: :x], hex: :real},',
+				'      {:b, "~> 1.0", opts: %{hex: :y}}',
+				"    ]",
+				"  end",
 				"end",
 			},
 		},

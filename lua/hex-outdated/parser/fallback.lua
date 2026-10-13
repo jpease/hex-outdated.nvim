@@ -213,6 +213,7 @@ end
 -- Where the dep list lives, judged from the first `deps:` key in lines
 -- first..last: `{ name = fn }` for `deps: fn()`, `{ line, col }` of an inline
 -- `[`, nil for any other value, and the `deps/0` function when there is no key.
+-- A value composed with `++` resolves through its leading operand.
 local function deps_source(src, first, last)
 	local text = table.concat(src.masked, "\n", first, last)
 	local _, key_end = text:find("%f[%w_]deps%s*:")
@@ -220,7 +221,14 @@ local function deps_source(src, first, last)
 		return { name = "deps" }
 	end
 	local name, rest = text:match("^%s*([%l_][%w_!?]*)%s*%(%s*%)()", key_end + 1)
-	if name and (text:find("^%s*[,%])]", rest) or text:find("^%s*$", rest)) then
+	if
+		name
+		and (
+			text:find("^%s*[,%])]", rest)
+			or text:find("^%s*$", rest)
+			or text:find("^%s*%+%+", rest)
+		)
+	then
 		return { name = name }
 	end
 	local bracket = text:match("^%s*()%[", key_end + 1)

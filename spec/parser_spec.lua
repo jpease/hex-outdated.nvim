@@ -1065,6 +1065,70 @@ describe("parser.fallback.parse_lines", function()
 		assert.is_nil(deps[2].package)
 	end)
 
+	it("keeps a later sibling's hex alias out of an unfinished tuple", function()
+		local source = {
+			"defmodule A.MixProject do",
+			"  defp deps do",
+			"    [",
+			'      {:a, "~> 1.0",',
+			'      {:b, "~> 2.0", hex: :c}',
+			"    ]",
+			"  end",
+			"end",
+		}
+		local deps = fallback.parse_lines(source)
+		assert.are.equal(2, #deps)
+		assert.are.same({ "a", "b" }, { deps[1].name, deps[2].name })
+		assert.is_nil(deps[1].package)
+		assert.are.equal("c", deps[2].package)
+		for i, req in ipairs({ "~> 1.0", "~> 2.0" }) do
+			local d = deps[i]
+			assert.are.equal(req, d.requirement)
+			assert.are.equal(req, source[d.row + 1]:sub(d.col_start + 1, d.col_end))
+		end
+	end)
+
+	it("keeps a hex alias inside a nested option value out of the tuple's alias", function()
+		local deps = fallback.parse_lines({
+			'defp deps, do: [{:a, "~> 1.0", opts: [hex: :x], hex: :real}, {:b, "~> 1.0", opts: [hex: :y]}]',
+		})
+		assert.are.equal(2, #deps)
+		assert.are.equal("real", deps[1].package)
+		assert.is_nil(deps[2].package)
+	end)
+
+	it("resolves a deps: value composed with ++ through its leading call", function()
+		local source = {
+			"defmodule A.MixProject do",
+			"  def project do",
+			"    [app: :a, deps: deps() ++ extra()]",
+			"  end",
+			"  defp deps do",
+			'    [{:jason, "~> 1.0"}]',
+			"  end",
+			'  defp extra, do: [{:extra_dep, "~> 1.0"}]',
+			"end",
+		}
+		local deps = fallback.parse_lines(source)
+		assert.are.equal(1, #deps)
+		assert.are.equal("jason", deps[1].name)
+		assert.are.equal(5, deps[1].row)
+		assert.are.equal("~> 1.0", source[6]:sub(deps[1].col_start + 1, deps[1].col_end))
+	end)
+
+	it("does not fall back to deps/0 when a composed deps: value is unresolvable", function()
+		local deps = fallback.parse_lines({
+			"defmodule A.MixProject do",
+			"  def project do",
+			"    [app: :a, deps: custom() |> Enum.reject(&skip?/1)]",
+			"  end",
+			'  defp custom, do: [{:custom_dep, "~> 1.0"}]',
+			'  defp deps, do: [{:unrelated, "~> 1.0"}]',
+			"end",
+		})
+		assert.are.same({}, deps)
+	end)
+
 	it("finds a tuple whose name atom starts on the line after '{'", function()
 		local source = {
 			"defp deps do",

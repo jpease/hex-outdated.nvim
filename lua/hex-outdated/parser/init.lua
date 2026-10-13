@@ -167,9 +167,23 @@ local function find_deps_value(node, bufnr)
 	end
 end
 
+-- The leading operand of a `++` chain (`deps() ++ extra()` -> `deps()`), else
+-- `node` itself.
+local function leading_operand(node, bufnr)
+	while node:type() == "binary_operator" do
+		local operator = node:field("operator")[1]
+		if not (operator and node_text(operator, bufnr) == "++") then
+			break
+		end
+		node = node:field("left")[1]
+	end
+	return node
+end
+
 -- The node holding the dep list: the `deps:` value of project/0's returned
 -- keyword list (anywhere in the file when there is no project/0), resolving
 -- `deps: name()` to `name/0` in project/0's module; `deps/0` without a key.
+-- A `++` chain value resolves through its leading operand.
 local function dep_list(root, bufnr)
 	local project = find_definition(root, bufnr, "project")
 	local scope, scoped = root, false
@@ -185,6 +199,7 @@ local function dep_list(root, bufnr)
 	local name = "deps"
 	local value = search and find_deps_value(search, bufnr)
 	if value then
+		value = leading_operand(value, bufnr)
 		if value:type() == "list" then
 			return value
 		end

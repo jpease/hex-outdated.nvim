@@ -209,7 +209,9 @@ if you define them first: `HexOutdatedUpToDate`, `HexOutdatedUpgradable`,
 
 hex-outdated parses `mix.exs` with Treesitter (Lua-pattern fallback) to find
 dependency tuples inside the function referenced by the project's `deps:`
-setting (`deps/0` by default). A Hex package alias such as
+setting (`deps/0` by default). For a composed setting such as
+`deps: deps() ++ extra()`, only the leading call or list is read. A Hex
+package alias such as
 `{:local_app, "~> 2.0", hex: :actual_package}` points the API lookup at the
 real package, while the local application name still keys into `mix.lock`. For
 each Hex dependency the plugin asynchronously queries
