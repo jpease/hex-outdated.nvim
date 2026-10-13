@@ -44,77 +44,77 @@ M.defaults = {
 
 M.options = util.deep_merge(M.defaults, {})
 
--- Top-level sections that must remain a table shape. A non-table override for
--- any of these (not just `api`, which #70/#72's own reproduction happens to
--- use) previously crashed downstream code indexing into it — see #72.
+-- Top-level sections whose override must be a table; anything else is dropped
+-- before the merge so it cannot replace the default section.
 local TABLE_SECTIONS = { "api", "lock", "cache", "text", "highlight", "popup", "keymaps" }
 
--- Runtime-sensitive numeric fields and the single shared contract each is
--- checked against (util.normalize_number). `fallback` is what a field
--- resets to when the merged value is invalid; it is intentionally NOT always
--- `defaults[section][field]` — api.max_concurrent's safe fallback is the
--- conservative floor of 1, not its default of 8, matching the pre-existing
--- (and still-tested) #35/#70 clamp behavior and hex_api's own clamp.
+-- Numeric fields; an invalid value falls back to its default.
+-- `opts` is passed to normalize_number alongside that default.
 local NUMERIC_RULES = {
 	{
 		section = "api",
 		field = "max_concurrent",
-		fallback = 1,
 		kind = "a positive integer",
 		opts = { integer = true, min = 1 },
 	},
 	{
 		section = "api",
 		field = "timeout_ms",
-		fallback = 5000,
 		kind = "a positive number",
 		opts = { min = 0, min_exclusive = true },
 	},
-	{
-		field = "debounce_ms",
-		fallback = 500,
-		kind = "a non-negative integer",
-		opts = { integer = true, min = 0 },
-	},
+	{ field = "debounce_ms", kind = "a non-negative integer", opts = { integer = true, min = 0 } },
 	{
 		section = "cache",
 		field = "ttl_seconds",
-		fallback = 3600,
 		kind = "a non-negative number",
 		opts = { min = 0 },
 	},
 	{
 		section = "cache",
 		field = "error_ttl_seconds",
-		fallback = 60,
 		kind = "a non-negative number",
 		opts = { min = 0 },
 	},
 	{
 		section = "popup",
 		field = "max_height",
-		fallback = 20,
 		kind = "a positive integer",
 		opts = { integer = true, min = 1 },
 	},
 }
 
--- String-leaf sections: every leaf must stay a string (formatting templates
--- and highlight-group names are `string.format`'d / used as group names
--- downstream); a non-string leaf falls back to its own default, not the
--- whole section, so one bad key doesn't discard sibling keys.
+-- String fields; an invalid value falls back to its own default so one bad key
+-- doesn't discard its siblings. `allow_false` fields also accept `false`.
+local STRING_RULES = {
+	{ section = "api", field = "base_url" },
+	{ section = "popup", field = "border" },
+	{ section = "popup", field = "hover_key", allow_false = true },
+}
+
+-- Every leaf of these sections must be a string.
 local STRING_LEAF_SECTIONS = { "text", "highlight" }
 
 local function warn(warnings, fmt, ...)
 	warnings[#warnings + 1] = string.format(fmt, ...)
 end
 
--- Reject a non-table `opts` outright (setup({ ... }) called with something
--- else entirely), then drop any top-level section override whose shape isn't
--- a table so a later deep_merge can't let it wholesale-replace the default
--- table (util.deep_merge's scalar-replaces-table behavior is itself
--- intentional and separately tested — see spec/util_spec.lua issue #37 — so
--- the fix has to happen here, before the merge, not inside deep_merge).
+--- Returns `value` when it is a finite number (floored when `opts.integer`)
+--- of at least `opts.min` (above it when `opts.min_exclusive`); otherwise
+--- `default`. The second result reports whether `value` was accepted.
+local function normalize_number(value, default, opts)
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return default, false
+	end
+	if opts.integer then
+		value = math.floor(value)
+	end
+	if value < opts.min or (opts.min_exclusive and value == opts.min) then
+		return default, false
+	end
+	return value, true
+end
+
 local function sanitize_top_level(opts, warnings)
 	if type(opts) ~= "table" then
 		if opts ~= nil then
@@ -144,23 +144,18 @@ local function sanitize_top_level(opts, warnings)
 	return sanitized
 end
 
-local function apply_numeric_rules(merged, warnings)
+local function apply_numeric_rules(merged, defaults, warnings)
 	for _, rule in ipairs(NUMERIC_RULES) do
 		local container = rule.section and merged[rule.section] or merged
-		local label = rule.section and (rule.section .. "." .. rule.field) or rule.field
+		local default = (rule.section and defaults[rule.section] or defaults)[rule.field]
 		local original = container[rule.field]
-		local value, ok = util.normalize_number(original, {
-			default = rule.fallback,
-			min = rule.opts.min,
-			min_exclusive = rule.opts.min_exclusive,
-			integer = rule.opts.integer,
-		})
+		local value, ok = normalize_number(original, default, rule.opts)
 		container[rule.field] = value
 		if not ok then
 			warn(
 				warnings,
 				"hex-outdated: %s must be %s (got %s); using %s",
-				label,
+				rule.section and (rule.section .. "." .. rule.field) or rule.field,
 				rule.kind,
 				tostring(original),
 				tostring(value)
@@ -169,7 +164,20 @@ local function apply_numeric_rules(merged, warnings)
 	end
 end
 
-local function apply_string_leaf_rules(merged, defaults, warnings)
+local function apply_string_rules(merged, defaults, warnings)
+	for _, rule in ipairs(STRING_RULES) do
+		local value = merged[rule.section][rule.field]
+		if type(value) ~= "string" and not (rule.allow_false and value == false) then
+			warn(
+				warnings,
+				"hex-outdated: %s.%s must be a string (got %s); using default",
+				rule.section,
+				rule.field,
+				type(value)
+			)
+			merged[rule.section][rule.field] = defaults[rule.section][rule.field]
+		end
+	end
 	for _, section in ipairs(STRING_LEAF_SECTIONS) do
 		for field, default in pairs(defaults[section]) do
 			local value = merged[section][field]
@@ -185,34 +193,26 @@ local function apply_string_leaf_rules(merged, defaults, warnings)
 			end
 		end
 	end
-	for _, field in ipairs({ "border", "hover_key" }) do
-		local value = merged.popup[field]
-		if type(value) ~= "string" then
+	for action, lhs in pairs(merged.keymaps) do
+		if type(lhs) ~= "string" then
 			warn(
 				warnings,
-				"hex-outdated: popup.%s must be a string (got %s); using default",
-				field,
-				type(value)
+				"hex-outdated: keymaps.%s must be a string (got %s); ignoring it",
+				tostring(action),
+				type(lhs)
 			)
-			merged.popup[field] = defaults.popup[field]
+			merged.keymaps[action] = nil
 		end
 	end
 end
 
---- Pure configuration normalization pass (#72). Accepts arbitrary user input
---- (any type — not just a well-shaped table) and `defaults`, and returns a
---- complete, correctly-shaped, correctly-typed options table plus a plain
---- array of warning strings. Never reads or writes `vim` state: the
---- Neovim-facing `M.setup` below is the only place that calls `vim.notify`,
---- and it does so exactly once per warning per `setup()` call — not once per
---- dependency or request, which is what hex_api's own defensive clamps (via
---- the same util.normalize_number contract) exist to avoid re-triggering.
+--- Merge `opts` (any value) over `defaults` and validate the result. Pure: never
+--- touches `vim`. Returns the options table and a list of warning strings.
 function M.normalize(defaults, opts)
 	local warnings = {}
-	local sanitized = sanitize_top_level(opts, warnings)
-	local merged = util.deep_merge(defaults, sanitized)
-	apply_numeric_rules(merged, warnings)
-	apply_string_leaf_rules(merged, defaults, warnings)
+	local merged = util.deep_merge(defaults, sanitize_top_level(opts, warnings))
+	apply_numeric_rules(merged, defaults, warnings)
+	apply_string_rules(merged, defaults, warnings)
 	return merged, warnings
 end
 

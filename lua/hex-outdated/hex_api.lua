@@ -1,96 +1,32 @@
+local config = require("hex-outdated.config")
 local util = require("hex-outdated.util")
 local version = require("hex-outdated.version")
 
 local M = {}
 
--- Effect boundaries: process spawn, event-loop scheduling, clock, JSON decode.
--- A nil field means "use the Neovim/stdlib default", resolved at call time so a
--- caller that swaps `vim.system` after this module was required (the headless
--- suite does) still takes effect. Injecting them keeps the scheduler's queue and
--- reset behavior testable without replacing the `vim` global wholesale (#74).
-local boundaries = {}
-
---- Test seam: replace the effect boundaries with `overrides`
---- ({ system, schedule, now, decode_json }); pass nil to restore the defaults.
---- Returns the previous table so a caller can put it back.
-function M._set_boundaries(overrides)
-	local previous = boundaries
-	boundaries = overrides or {}
-	return previous
-end
-
-local function clock()
-	return (boundaries.now or os.time)()
-end
-
--- One owner for every piece of mutable request state (#74):
---   cache      -- "endpoint|name" -> { versions = {...}, latest = "x.y.z", time = epoch }
---                 or { error = msg, not_found = bool }
---   pending    -- "endpoint|name" -> list of callbacks waiting on a running request.
---                 A debounced analyze re-fires while earlier fetches are still
---                 running; without this, each cycle would spawn a duplicate curl
---                 for every not-yet-cached dep.
+-- All mutable request state:
+--   cache      -- "base_url|name" -> package result (see get_package)
+--   pending    -- "base_url|name" -> callbacks waiting on the running request
 --   queue      -- FIFO of { name, opts } waiting for a slot
---   active     -- curl processes running right now
---   max_concurrent -- bounds `active`; a mix.exs with many deps would otherwise
---                 spawn one process per dep at once, which is heavy and
---                 amplifies a retry storm against a failing upstream.
---                 Unlimited until a caller configures it.
---   generation -- bumped by clear_cache; a completion from an earlier generation
---                 is retired instead of mutating the state that replaced it.
+--   active     -- curl processes running now; never exceeds max_concurrent
+--   generation -- bumped by clear_cache; completions from an older generation
+--                 never touch the state that replaced theirs
 local scheduler = {
 	cache = {},
 	pending = {},
 	queue = {},
 	active = 0,
-	max_concurrent = math.huge,
+	max_concurrent = config.defaults.api.max_concurrent,
 	generation = 0,
 }
 
-local pump -- forward declaration: a completion (or a raised limit) drains the queue
+local pump
 
 local function cache_key(name, base_url)
-	return (base_url or "https://hex.pm/api") .. "|" .. name
+	return base_url .. "|" .. name
 end
 
--- Defensive normalization for caller-supplied TTLs: config.setup already
--- warns once for an invalid cache.ttl_seconds/error_ttl_seconds at startup,
--- but get_package must not let a bad value reach `fresh`'s numeric comparison
--- regardless of caller (tests, other integrations, or config.setup being
--- bypassed entirely) — mirrors the existing max_concurrent clamp below.
--- Goes through the same util.normalize_number contract config.lua's
--- normalization pass uses, rather than a lookalike copy of it (#72).
-local function safe_ttl(v, default)
-	local value = util.normalize_number(v, { default = default, min = 0 })
-	return value
-end
-
--- The concurrency limit is a property of the scheduler, not of any one request.
--- Callers still pass `max_concurrent` per request (config.api_opts fans the one
--- configured value out to every dependency), but every change goes through this
--- setter rather than assigning a bare module-level variable from anywhere (#74).
--- A raised limit re-drains the queue here, so work already waiting starts now
--- instead of sitting parked until the next completion happens to pump.
-local function set_max_concurrent(value)
-	-- Config-level validation (config.setup) already warns once for invalid
-	-- values; this is a silent defensive clamp for callers that bypass it.
-	-- Same util.normalize_number contract as config.lua's api.max_concurrent
-	-- rule (fallback of 1, not the default of 8 — see config.lua's
-	-- NUMERIC_RULES comment), not a divergent copy of it (#72).
-	scheduler.max_concurrent =
-		util.normalize_number(value, { default = 1, integer = true, min = 1 })
-	pump()
-end
-
--- Reset all scheduler state, not just the cache: a lingering `pending`/`queue`
--- entry or a non-zero active count from a previous run would otherwise leak
--- across a clear and silently throttle or stall the next fetch. (Used by tests.)
---
--- Bumping the generation is what makes this safe while requests are running: a
--- curl spawned before the reset can still complete afterwards, and it must not
--- write into the cache that replaced its own, clear a waiter list it no longer
--- owns, or decrement a counter that was already zeroed. The concurrency limit
--- survives a reset — it is configuration, not per-run state.
+--- Drop cached results and queued work. The concurrency limit is kept.
 function M.clear_cache()
 	scheduler.cache = {}
 	scheduler.pending = {}
@@ -103,27 +39,23 @@ local function fresh(entry, ttl, error_ttl)
 	if not entry then
 		return false
 	end
-	local age = clock() - (entry.time or 0)
-	-- A cached failure is fresh for a shorter window so a failing/unreachable
-	-- hex.pm is retried at a bounded rate instead of on every debounce cycle.
+	local age = os.time() - entry.time
+	-- Failures expire sooner so an unreachable host is retried at a bounded rate.
 	if entry.error then
-		return age < (error_ttl or 0)
+		return age < error_ttl
 	end
 	return age < ttl
 end
 
 local function curl_command(name, opts)
-	local base = opts.base_url or "https://hex.pm/api"
-	local timeout_s = util.timeout_seconds(opts.timeout_ms, 5000)
-	local url = string.format("%s/packages/%s", base, name)
 	return {
 		"curl",
 		"-sSL",
 		"--max-time",
-		string.format("%.15g", timeout_s),
+		string.format("%.15g", opts.timeout_ms / 1000),
 		"-w",
 		"\n%{http_code}",
-		url,
+		string.format("%s/packages/%s", opts.base_url, name),
 	}
 end
 
@@ -149,19 +81,21 @@ local function latest_active_version(versions)
 	return latest_stable or latest or versions[1]
 end
 
--- Common curl exit codes, mapped to messages a user can act on. Anything else
--- keeps the numeric code so it can be looked up.
-local curl_errors = {
-	[6] = "could not resolve hex.pm",
-	[7] = "could not connect to hex.pm",
-	[28] = "request timed out",
-}
+local function curl_error(code, base_url)
+	local host = util.url_host(base_url)
+	if code == 6 then
+		return "could not resolve " .. host
+	elseif code == 7 then
+		return "could not connect to " .. host
+	elseif code == 28 then
+		return "request timed out"
+	end
+	return "request failed (curl " .. tostring(code) .. ")"
+end
 
-local function parse_package_response(obj, decode_json, now)
+local function parse_package_response(obj, base_url)
 	if obj.code ~= 0 then
-		return {
-			error = curl_errors[obj.code] or ("request failed (curl " .. tostring(obj.code) .. ")"),
-		}
+		return { error = curl_error(obj.code, base_url) }
 	end
 	local body, status = (obj.stdout or ""):match("^(.*)\n(%d+)%s*$")
 	status = tonumber(status)
@@ -173,7 +107,7 @@ local function parse_package_response(obj, decode_json, now)
 		return { error = "http " .. tostring(status) }
 	end
 
-	local ok, data = pcall(decode_json, body)
+	local ok, data = pcall(vim.json.decode, body)
 	if not ok or type(data) ~= "table" then
 		return { error = "invalid response" }
 	end
@@ -203,26 +137,16 @@ local function parse_package_response(obj, decode_json, now)
 	if saw_release and (not latest or not active[latest]) then
 		latest = latest_active_version(versions)
 	end
-	local result = {
+	return {
 		versions = versions,
 		latest = latest,
-		retirements = retirements,
-		time = now(),
+		all_retired = (saw_release and #versions == 0) or nil,
 	}
-	if saw_release and #versions == 0 then
-		result.all_retired = true
-	end
-	return result
 end
 
-M._curl_command = curl_command
-M._parse_package_response = parse_package_response
-
--- Callbacks always run on the event loop, never inline in the process's
--- completion callback.
+-- Callbacks always run on the event loop, never inside the process callback.
 local function schedule_delivery(waiters, result)
-	local schedule = boundaries.schedule or vim.schedule
-	schedule(function()
+	vim.schedule(function()
 		for _, cb in ipairs(waiters) do
 			cb(result)
 		end
@@ -230,75 +154,46 @@ local function schedule_delivery(waiters, result)
 end
 
 local function spawn(name, opts)
-	local cmd = curl_command(name, opts)
 	local key = cache_key(name, opts.base_url)
-	-- Capture the waiter list by identity and the generation by value, both at
-	-- spawn time. get_package appends to this same table while the request runs
-	-- (in-flight coalescing), so late waiters are still served; re-reading
-	-- `scheduler.pending` at completion time is what let a reset hand `deliver`
-	-- a nil list to iterate (#74).
-	local waiters = scheduler.pending[key] or {}
+	-- Captured at spawn time: late waiters append to this same list, and a
+	-- clear_cache in between must not hand deliver a different (or nil) list.
+	local waiters = scheduler.pending[key]
 	local generation = scheduler.generation
 	local settled = false
 	scheduler.active = scheduler.active + 1
 
 	local function deliver(result)
-		-- One request releases one slot. A process can report completion twice —
-		-- a spawn that raises after its exit callback already fired, or a
-		-- double-fired libuv exit — and the later report is ignored.
+		-- A process can report completion twice; one request releases one slot.
 		if settled then
 			return
 		end
 		settled = true
-		if result.error then
-			-- Errors carry no time of their own; stamp one so negative caching can age them.
-			result.time = result.time or clock()
-		end
+		result.time = os.time()
 		if generation ~= scheduler.generation then
-			-- Retired: clear_cache reset the scheduler after this request was
-			-- spawned, so the slot, waiter list, and cache entry it belonged to
-			-- are gone. Mutating the state that replaced them is exactly what
-			-- drove the active count negative and crashed on a nil waiter list.
-			-- The waiters captured at spawn time still get their answer: it is an
-			-- honest reply to the request they made, and a caller that never
-			-- heard back would hold a "loading" indicator forever. The result is
-			-- not cached — the cache it was fetched for no longer exists.
+			-- Retired by clear_cache: answer the original waiters, touch no state.
 			schedule_delivery(waiters, result)
 			return
 		end
 		if result.error and not result.not_found then
-			-- Serve stale-but-good data through a transient failure rather than
-			-- flipping the dep to an error indicator. A definitive 404 means the
-			-- package doesn't exist (or was renamed) — never inherit stale data for
-			-- that case, only for a transient failure (network error, 5xx). The
-			-- cached failure still ages out via negative caching, so we retry once
-			-- the window passes.
+			-- A transient failure keeps the last good versions; a 404 never does.
 			local prev = scheduler.cache[key]
 			if prev and prev.versions and #prev.versions > 0 then
 				result.versions = prev.versions
 				result.latest = prev.latest
-				result.stale = true
 			end
 		end
 		scheduler.cache[key] = result
 		if scheduler.pending[key] == waiters then
 			scheduler.pending[key] = nil
 		end
-		-- The generation check above already keeps a retired completion away from
-		-- this decrement; the floor is belt-and-braces so the count can never go
-		-- negative and silently lift the concurrency cap.
-		scheduler.active = math.max(0, scheduler.active - 1)
+		scheduler.active = scheduler.active - 1
 		pump()
 		schedule_delivery(waiters, result)
 	end
 
-	-- vim.system raises if the process can't be spawned (e.g. curl missing). Without
-	-- this guard the error escapes analyze and the pending entry is never cleared, so
-	-- the package stays "loading" forever and future fetches ride a request that
-	-- never resolves.
-	local ok, err = pcall(boundaries.system or vim.system, cmd, { text = true }, function(obj)
-		local decode = boundaries.decode_json or vim.json.decode
-		local parse_ok, result = pcall(parse_package_response, obj, decode, clock)
+	-- vim.system raises when curl can't be spawned; that must still settle the request.
+	local ok, err = pcall(vim.system, curl_command(name, opts), { text = true }, function(obj)
+		local parse_ok, result = pcall(parse_package_response, obj, opts.base_url)
 		deliver(parse_ok and result or { error = "invalid response" })
 	end)
 	if not ok then
@@ -313,26 +208,20 @@ function pump()
 	end
 end
 
---- Fetch package release info from hex.pm.
---- opts: { base_url, timeout_ms, ttl_seconds, error_ttl_seconds, max_concurrent, force }
---- `max_concurrent` configures the shared scheduler rather than this one request:
---- it applies to every request from here on, queued ones included.
---- callback receives { versions = {strings}, latest = string, time = epoch }
---- or { error = msg, not_found? }.
+--- Fetch package release info.
+--- opts: core.api_opts() plus optional `force`. `max_concurrent` sets the shared
+--- scheduler limit for every request from here on, queued ones included.
+--- callback receives { versions, latest, all_retired?, time } on success, or
+--- { error, not_found?, time } on failure; a transient failure also carries the
+--- last good `versions`/`latest`.
 function M.get_package(name, opts, callback)
-	opts = opts or {}
 	local key = cache_key(name, opts.base_url)
-	local ttl = safe_ttl(opts.ttl_seconds, 3600)
-	local error_ttl = safe_ttl(opts.error_ttl_seconds, 0)
-	if opts.max_concurrent ~= nil then
-		set_max_concurrent(opts.max_concurrent)
-	end
-	if not opts.force and fresh(scheduler.cache[key], ttl, error_ttl) then
+	scheduler.max_concurrent = opts.max_concurrent
+	pump()
+	if not opts.force and fresh(scheduler.cache[key], opts.ttl_seconds, opts.error_ttl_seconds) then
 		callback(scheduler.cache[key])
 		return
 	end
-	-- Already fetching this package on this endpoint: ride the in-flight request
-	-- rather than spawning another curl.
 	local waiters = scheduler.pending[key]
 	if waiters then
 		waiters[#waiters + 1] = callback
