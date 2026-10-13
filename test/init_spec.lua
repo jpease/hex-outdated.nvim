@@ -64,6 +64,34 @@ describe("lock lens toggle", function()
 		hex.lock()
 		eq(not before, core.state[buf].lock_lens, "lens flips")
 	end)
+
+	it("renders an unanalyzed buffer without a scheduled error", function()
+		local original_get_package = hex_api.get_package
+		hex_api.get_package = function() end -- no network for any attached mix.exs
+		hex.setup({})
+		hex_api.get_package = original_get_package
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. "/notes.txt")
+		vim.api.nvim_set_current_buf(buf)
+		is_nil(core.state[buf], "buffer never analyzed")
+
+		local scheduled = {}
+		local original_schedule = vim.schedule
+		vim.schedule = function(fn)
+			scheduled[#scheduled + 1] = fn
+		end
+		local cmd_ok, cmd_err = pcall(vim.cmd, "HexOutdated lock")
+		vim.schedule = original_schedule
+		is_true(cmd_ok, tostring(cmd_err))
+		eq(1, #scheduled, "lock schedules one render")
+		local ok, err = pcall(scheduled[1])
+		is_true(ok, tostring(err))
+
+		eq(not config.options.lock.lens, core.state[buf].lock_lens, "lens flips from the default")
+		local ns = vim.api.nvim_get_namespaces().hex_outdated_virt
+		eq({}, vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}), "no annotations")
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
 end)
 
 describe("state seeding", function()

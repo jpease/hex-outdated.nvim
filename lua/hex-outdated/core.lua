@@ -11,11 +11,12 @@ local M = {}
 M.state = {}
 
 --- Return the buffer's state, seeding `enabled`/`lock_lens` from config on first
---- touch; afterwards the buffer owns them (see toggle/lock).
+--- touch (with no deps until analyzed); afterwards the buffer owns them (see
+--- toggle/lock).
 function M.ensure_state(bufnr)
 	local st = M.state[bufnr]
 	if not st then
-		st = { enabled = config.options.enabled, lock_lens = config.options.lock.lens }
+		st = { deps = {}, enabled = config.options.enabled, lock_lens = config.options.lock.lens }
 		M.state[bufnr] = st
 	end
 	return st
