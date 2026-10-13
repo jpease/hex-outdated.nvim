@@ -1,8 +1,0 @@
-# Raven: rg/fd/ast-grep skip dot-directories; these keep installed guidance searchable (see README.md)
-!.agents/
-!.claude/
-!.codex/
-!.raven/
-
-# Raven: rg/fd/ast-grep skip dot-directories; these keep installed guidance searchable (see README.md)
-!.gemini/

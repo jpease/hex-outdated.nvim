@@ -1,14 +1,13 @@
-# Machine-local recipes (not committed). Absent in a fresh clone; `import?`
-# skips it silently rather than erroring.
+# Machine-local recipes (not committed); `import?` skips it when absent.
 import? 'private.just'
 
-# Run the pure busted suite (no Neovim required)
+# Run the busted suite (no Neovim required)
 test:
     busted
 
 # Run the headless-Neovim integration suite
 test-nvim:
-    nvim --headless -u NONE -l test/run.lua
+    nvim --headless -u NONE -i NONE -l test/run.lua
 
 # Run lint checks
 lint:
@@ -25,29 +24,13 @@ fmt-check:
 # Fast static checks for the pre-commit hook (no tests)
 check-fast: fmt-check lint
 
-# Run the standard local verification set (also runs in the pre-push hook).
-# A successful run credits the pre-push stamp too, so a manual `just check`
-# right before pushing skips a redundant rerun in the hook.
+# Full local verification (also run by the pre-push hook)
 check: check-fast test test-nvim
-    [ -f .raven/git-hooks/lib/with-verified-cache.sh ] && sh .raven/git-hooks/lib/with-verified-cache.sh check true || true
-
-# Report known advisories in dependency manifests -- a no-op for this template.
-#
-# Raven standardizes `just audit` on osv-scanner, which reads lockfiles for npm,
-# PyPI, crates.io, Go, Hex, Maven and others, but has no Lua input at all:
-# LuaRocks rockspecs are not one of its scan targets. The recipe still exists so
-# `just audit` means the same thing in every Raven template, and so the gap is
-# stated out loud rather than reported as a clean scan.
-audit:
-    @echo "No dependency audit for Lua: osv-scanner reads no LuaRocks manifest."
-    @echo "Rock dependencies are NOT covered by 'just audit' -- treat this as a known gap."
 
 # Install pre-commit (fast checks) and pre-push (full check) git hooks
 install-hooks:
     #!/usr/bin/env sh
-    # Resolve Git's effective hooks dir (honors core.hooksPath and linked
-    # worktrees) so hooks land where Git will run them, not a hard-coded
-    # .git/hooks that a custom hooksPath would ignore.
+    # Honors core.hooksPath and linked worktrees.
     hooks_dir=$(git rev-parse --git-path hooks) || exit 1
     install_hook() {
         name="$1"
@@ -55,7 +38,7 @@ install-hooks:
         path="$hooks_dir/$name"
         if [ -f "$path" ]; then
             echo "A $name hook already exists at $path."
-            echo "To use RAVEN's gate, add this line to it:"
+            echo "Add this line to it to run the project checks:"
             printf "  %s\n" "$cmd"
         else
             mkdir -p "$hooks_dir"
