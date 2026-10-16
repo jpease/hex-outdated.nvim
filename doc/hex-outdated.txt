@@ -71,13 +71,13 @@ then call setup from your init.lua: >lua
     require("hex-outdated").setup({})
 <
 Every manager other than lazy.nvim's `opts = {}` needs an explicit
-`require("hex-outdated").setup({})` call — the plugin activates entirely
+`require("hex-outdated").setup({})` call, because the plugin activates entirely
 through `setup()`.
 
 ==============================================================================
 4. USAGE                                                     *hex-outdated-usage*
 
-Open a `mix.exs` — status appears automatically and updates as you type.
+When you open a `mix.exs`, status appears automatically and updates as you type.
 
 The actions are also plain Lua functions, so you can bind your own keys: >lua
     local hex = require("hex-outdated")

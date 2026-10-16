@@ -102,7 +102,7 @@ function M._info_lines(dep)
 	if dep.latest then
 		latest_str = dep.latest
 	elseif dep.status == "invalid" then
-		latest_str = "—"
+		latest_str = "none"
 	elseif dep.status == "error" then
 		latest_str = "unavailable"
 	else
@@ -112,9 +112,9 @@ function M._info_lines(dep)
 	return lines
 end
 
---- Return the dep at zero-based `row`/`col` — exact span match, else the
---- nearest dep with span metadata, else the first span-less dep on the row —
---- or nil (pure; no Neovim APIs).
+--- Return the dep at zero-based `row`/`col`, preferring the exact span match,
+--- then the nearest dep with span metadata, then the first span-less dep on the
+--- row; nil when none match (pure; no Neovim APIs).
 function M.dep_at_position(deps, row, col)
 	local nearest
 	local nearest_distance
@@ -225,7 +225,7 @@ end
 
 -- Open a non-modifiable scratch float at the cursor showing `lines`, wiped when
 -- hidden. Width fits the content (>= opts.min_width); height fits the line
--- count, capped at opts.max_height when given. Returns win, buf — or nil when
+-- count, capped at opts.max_height when given. Returns win, buf, or nil when
 -- buffer creation fails. opts: { filetype, enter, min_width, max_height? }.
 local function open_cursor_float(lines, opts)
 	local buf = vim.api.nvim_create_buf(false, true)

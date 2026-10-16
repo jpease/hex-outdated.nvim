@@ -14,13 +14,14 @@ diagnostics.
 
 ## Features
 
-- Live inline virtual text as you edit `mix.exs` — no `:command` needed
+- Live inline virtual text as you edit `mix.exs`, no `:command` needed
 - Status at a glance: up to date, upgradable, outdated pin, or non-existent
 - Non-existent versions/packages also show up as real `vim.diagnostic` entries
 - One-key actions: upgrade the requirement under the cursor, browse published
   versions, or open the package on hex.pm
-- Treesitter parsing, with a Lua-pattern fallback when the elixir parser is missing
-- Status comes from `mix.exs` alone — no shelling out to `mix`
+- Treesitter parsing, with a Lua line-scanner fallback when the elixir parser is
+  missing or the buffer doesn't parse mid-edit
+- Status comes from `mix.exs` alone; no shelling out to `mix`
 - Async, cached hex.pm requests; configurable text, highlights, and keymaps
 
 ## Requirements
@@ -81,12 +82,12 @@ require("hex-outdated").setup({})
 ```
 
 Every manager other than lazy.nvim's `opts = {}` needs an explicit
-`require("hex-outdated").setup({})` call — the plugin activates entirely through
-`setup()`.
+`require("hex-outdated").setup({})` call, because the plugin activates entirely
+through `setup()`.
 
 ## Usage
 
-Open a `mix.exs` — status appears automatically and updates as you type.
+When you open a `mix.exs`, status appears automatically and updates as you type.
 
 `:HexOutdated {refresh|toggle|upgrade|versions|open|info|lock}`
 (bare `:HexOutdated` = refresh)
@@ -99,7 +100,7 @@ Open a `mix.exs` — status appears automatically and updates as you type.
 | `versions` | Floating window of active published versions; `<CR>` inserts the selected one, `q`/`<Esc>` closes. |
 | `open`     | Open the package's page on hex.pm in a browser. |
 | `info`     | Floating detail view (requirement / locked / latest) for the dependency under the cursor. |
-| `lock`     | Toggle the per-buffer lock lens — a `locked X · latest Y` line under each dependency. |
+| `lock`     | Toggle the per-buffer lock lens: a `locked X · latest Y` line under each dependency. |
 
 The same actions are also plain functions, so you can bind your own keys:
 
@@ -130,14 +131,14 @@ analyze (combined `and`/`or` clauses).
 ## Lock context (optional)
 
 By default hex-outdated reads only `mix.exs`. When a `mix.lock` is present it can
-also show what's actually locked — kept secondary so the inline requirement
+also show what's actually locked, kept secondary so the inline requirement
 status stays primary:
 
-- **Detail float** — `:HexOutdated info` (or press `K` on a dependency line)
+- **Detail float.** `:HexOutdated info` (or press `K` on a dependency line)
   shows requirement / locked / latest for the dependency under the cursor.
-- **Lens** — `:HexOutdated lock` toggles a `locked X · latest Y` line under each
+- **Lens.** `:HexOutdated lock` toggles a `locked X · latest Y` line under each
   dependency (off by default).
-- **Stale-lock diagnostic** — a warning when `mix.lock` holds a version that no
+- **Stale-lock diagnostic.** A warning when `mix.lock` holds a version that no
   longer satisfies your requirement (e.g. after you tighten it), prompting a
   `mix deps.get`.
 
@@ -207,9 +208,15 @@ if you define them first: `HexOutdatedUpToDate`, `HexOutdatedUpgradable`,
 
 ## How it works
 
-hex-outdated parses `mix.exs` with Treesitter (Lua-pattern fallback) to find
-dependency tuples inside the function referenced by the project's `deps:`
-setting (`deps/0` by default). For a composed setting such as
+hex-outdated parses `mix.exs` with Treesitter to find dependency tuples inside
+the function referenced by the project's `deps:` setting (`deps/0` by default).
+It falls back to a Lua line scanner in two cases: Neovim doesn't ship the
+elixir parser, and while you type the buffer is often syntactically
+incomplete, where Treesitter's error recovery can swallow neighboring
+dependency tuples. The scanner only needs to track strings, comments, and
+`do`/`end` blocks, so a half-written tuple doesn't hide the rest of the list.
+Treesitter stays the primary path because a real parse tree handles
+well-formed files without the scanner's heuristics. For a composed setting such as
 `deps: deps() ++ extra()`, only the leading call or list is read. A Hex
 package alias such as
 `{:local_app, "~> 2.0", hex: :actual_package}` points the API lookup at the
