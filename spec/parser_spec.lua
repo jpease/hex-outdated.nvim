@@ -624,7 +624,7 @@ describe("parser.fallback.parse_lines", function()
 		assert.are.equal("real", deps[1].name)
 	end)
 
-	it("still resolves the dep function by whole-file search with no project/0", function()
+	it("resolves the dep function by whole-file search when there is no project/0", function()
 		local deps = fallback.parse_lines({
 			"defmodule App.MixProject do",
 			"  def config do",

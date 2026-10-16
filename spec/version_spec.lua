@@ -46,7 +46,7 @@ describe("version.parse numeric identifier digit limit", function()
 	--   Version.parse("1.0.0-100000000000000")    -> :error    (15 digits, rejected)
 	--   Version.parse("1.0.0+100000000000000")    -> {:ok, _}  (build metadata not numeric, unlimited)
 	--   Version.parse("1.0.0-abc100000000000000") -> {:ok, _}  (non-numeric prerelease id, unlimited)
-	it("accepts a 14-digit core numeric identifier (the exact boundary)", function()
+	it("accepts a 14-digit core numeric identifier", function()
 		assert.is_not_nil(version.parse("99999999999999.0.0"))
 	end)
 
@@ -54,7 +54,7 @@ describe("version.parse numeric identifier digit limit", function()
 		assert.is_nil(version.parse("100000000000000.0.0"))
 	end)
 
-	it("accepts a 14-digit numeric prerelease identifier (the exact boundary)", function()
+	it("accepts a 14-digit numeric prerelease identifier", function()
 		assert.is_not_nil(version.parse("1.0.0-99999999999999"))
 	end)
 
@@ -62,16 +62,13 @@ describe("version.parse numeric identifier digit limit", function()
 		assert.is_nil(version.parse("1.0.0-100000000000000"))
 	end)
 
-	it("does not apply the digit limit to build metadata (negative control)", function()
+	it("accepts a build metadata identifier longer than 14 digits", function()
 		assert.is_not_nil(version.parse("1.0.0+100000000000000"))
 	end)
 
-	it(
-		"does not apply the digit limit to a non-numeric prerelease identifier (negative control)",
-		function()
-			assert.is_not_nil(version.parse("1.0.0-abc100000000000000"))
-		end
-	)
+	it("accepts a non-numeric prerelease identifier longer than 14 characters", function()
+		assert.is_not_nil(version.parse("1.0.0-abc100000000000000"))
+	end)
 end)
 
 describe("version.is_stable / tostring", function()
@@ -95,17 +92,12 @@ describe("version.parse_requirement", function()
 		assert.is_nil(version.parse_requirement("~> nonsense"))
 	end)
 
-	it(
-		"fails the whole requirement (not a silently-dropped operand) for an over-limit operand",
-		function()
-			-- 15-digit core identifier: Elixir rejects it (see the digit-limit tests
-			-- above), so M.parse returns nil for the operand and parse_requirement
-			-- must propagate that as a full failure rather than returning a
-			-- requirement with a missing/garbage version.
-			assert.is_nil(version.parse_requirement("~> 100000000000000.0.0"))
-			assert.is_nil(version.parse_requirement("== 1.0.0-100000000000000"))
-		end
-	)
+	it("returns nil for a requirement whose operand exceeds the digit limit", function()
+		-- 15-digit core identifier: Elixir rejects the operand, so the whole
+		-- requirement is invalid.
+		assert.is_nil(version.parse_requirement("~> 100000000000000.0.0"))
+		assert.is_nil(version.parse_requirement("== 1.0.0-100000000000000"))
+	end)
 end)
 
 describe("version.compare", function()
@@ -182,18 +174,15 @@ describe("version.satisfies", function()
 		assert.is_true(version.satisfies(req("!= 1.2.3"), p("1.2.3-alpha")))
 	end)
 
-	it("still excludes a prerelease against a stable operand with >= (lower bound)", function()
+	it("excludes a prerelease of a stable operand with >=", function()
 		assert.is_false(version.satisfies(req(">= 1.2.3"), p("1.2.3-alpha")))
 	end)
 
-	it(
-		"still excludes a prerelease against a stable operand with > even when numerically above",
-		function()
-			assert.is_false(version.satisfies(req("> 1.0.0"), p("1.2.3-alpha")))
-		end
-	)
+	it("excludes a prerelease above a stable operand with >", function()
+		assert.is_false(version.satisfies(req("> 1.0.0"), p("1.2.3-alpha")))
+	end)
 
-	it("still excludes a prerelease against a stable operand with ==", function()
+	it("excludes a prerelease of a stable operand with ==", function()
 		assert.is_false(version.satisfies(req("== 1.2.3"), p("1.2.3-alpha")))
 	end)
 
@@ -203,19 +192,19 @@ describe("version.satisfies", function()
 		assert.is_false(version.satisfies(req("~> 2.0-rc"), p("3.0.0-rc.1")))
 	end)
 
-	it("still allows a prerelease strictly below the ~> upper bound", function()
+	it("allows a prerelease below the ~> upper bound", function()
 		assert.is_true(version.satisfies(req("~> 2.0-rc"), p("2.1.0-rc.1")))
 	end)
 
-	it("still allows a prerelease of the requirement's own major.minor.patch for ~>", function()
+	it("allows a prerelease of the ~> operand's own version", function()
 		assert.is_true(version.satisfies(req("~> 2.0-rc"), p("2.0.0-rc.2")))
 	end)
 
-	it("leaves >= unaffected by the ~> upper-bound-prerelease fix", function()
+	it("allows a prerelease of the next major with >=", function()
 		assert.is_true(version.satisfies(req(">= 2.0.0-rc"), p("3.0.0-rc.1")))
 	end)
 
-	it("still allows a prerelease strictly below a three-component ~> upper bound", function()
+	it("allows a prerelease below a three-component ~> upper bound", function()
 		assert.is_true(version.satisfies(req("~> 2.0.0-rc"), p("2.0.1-rc.1")))
 	end)
 end)

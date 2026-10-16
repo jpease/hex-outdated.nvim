@@ -464,7 +464,7 @@ describe("hex_api clear_cache while requests are running", function()
 		assert.are.equal(2, #spawns)
 	end)
 
-	it("still answers the waiters a retired request was spawned for", function()
+	it("delivers results to callbacks registered before the reset", function()
 		local result
 		api.get_package("a", opts(), function(r)
 			result = r

@@ -311,7 +311,7 @@ describe("auto_update debounce", function()
 		end)
 	end)
 
-	it("still analyzes normally when auto_update is left enabled", function()
+	it("analyzes once after a debounced edit when auto_update is enabled", function()
 		with_stubbed_analyze(function(get_calls)
 			hex.setup({ enabled = false, auto_update = true, debounce_ms = 30 })
 			local buf = vim.api.nvim_create_buf(true, false)
